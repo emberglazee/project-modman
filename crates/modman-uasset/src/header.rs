@@ -181,5 +181,54 @@ mod tests {
         );
         println!("  folder: {:?}", header.folder_name);
         println!("  flags: 0x{:08X}", header.package_flags);
+
+        // Read name table
+        let name_offset = header.name_offset as u64;
+        file.seek(std::io::SeekFrom::Start(name_offset)).unwrap();
+        let names = crate::names::read_name_table(&mut file, header.name_count).unwrap();
+        println!("Name table (first 10):");
+        for (i, name) in names.iter().enumerate().take(10) {
+            println!("  [{}] {}", i, name);
+        }
+
+        // Read export map
+        let export_offset = header.export_offset as u64;
+        file.seek(std::io::SeekFrom::Start(export_offset)).unwrap();
+        let exports = crate::export::read_export_map(&mut file, header.export_count).unwrap();
+        for (i, exp) in exports.iter().enumerate() {
+            println!(
+                "Export[{}]: offset={}, size={}",
+                i, exp.serial_offset, exp.serial_size
+            );
+        }
+
+        // Read export data from .uexp file
+        let mut uexp_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        uexp_path.push("tests/fixtures");
+        uexp_path.push("test.uexp");
+
+        if uexp_path.exists() {
+            let mut uexp_file = File::open(&uexp_path).unwrap();
+            // .uexp file starts at offset 0 — serial_offset in the header
+            // is relative to the .uasset file, but for paired files the
+            // data is at the start of .uexp
+            uexp_file.seek(std::io::SeekFrom::Start(0)).unwrap();
+
+            // Read properties from .uexp (cooked format may use unversioned serialization)
+            println!("Reading properties from .uexp...");
+            match crate::properties::read_properties(&mut uexp_file, &names) {
+                Ok(props) => {
+                    println!("Found {} properties:", props.len());
+                    for prop in &props {
+                        println!("  {} ({}): {:?}", prop.name, prop.type_name, prop.value);
+                    }
+                }
+                Err(e) => {
+                    println!("Property read error (expected for non-DataTable): {}", e);
+                }
+            }
+        } else {
+            println!("No .uexp fixture at {:?}", uexp_path);
+        }
     }
 }

@@ -3,8 +3,11 @@
 //! Standalone crate with no internal modman dependencies.
 //! Handles UE4.24 (v1.0.4d) and UE4.27 (v2.1.1A) uasset formats.
 
+pub mod export;
 pub mod header;
-pub mod name_table;
+pub mod names;
+pub mod properties;
+
 use std::io::Read;
 
 pub use header::PackageHeader;
