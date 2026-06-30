@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand};
 
+mod game;
+
 #[derive(Parser)]
 #[command(
     name = "modman",
@@ -199,10 +201,89 @@ fn main() {
             }
         }
         Some(Commands::Build {
-            preset_paths: _,
-            install_path: _,
+            preset_paths,
+            install_path,
         }) => {
-            eprintln!("build: not yet implemented — coming in 0.11.0");
+            // Determine game path
+            let game_path = install_path.clone().or_else(|| {
+                crate::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
+            });
+
+            match game_path {
+                Some(path) => {
+                    println!("Game: {}", path);
+                    println!("Scanning {} preset paths ...", preset_paths.len());
+
+                    // Try to parse each preset path as .dtm files
+                    for pattern in &preset_paths {
+                        let path = std::path::Path::new(pattern);
+                        if path.is_dir() {
+                            if let Ok(entries) = std::fs::read_dir(path) {
+                                for entry in entries.flatten() {
+                                    let p = entry.path();
+                                    if p.extension().is_some_and(|e| e == "dtm" || e == "dtp") {
+                                        match std::fs::read_to_string(&p) {
+                                            Ok(content) => {
+                                                match serde_json::from_str::<
+                                                    modman_core::manifest::WingmanMod,
+                                                >(
+                                                    &content
+                                                ) {
+                                                    Ok(modm) => {
+                                                        println!(
+                                                            "  Loaded: {} ({})",
+                                                            modm.id,
+                                                            p.display()
+                                                        );
+                                                    }
+                                                    Err(e) => {
+                                                        eprintln!(
+                                                            "  Parse error {}: {}",
+                                                            p.display(),
+                                                            e
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                eprintln!("  Read error {}: {}", p.display(), e);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else if path.is_file()
+                            && path.extension().is_some_and(|e| e == "dtm" || e == "dtp")
+                        {
+                            match std::fs::read_to_string(path) {
+                                Ok(content) => match serde_json::from_str::<
+                                    modman_core::manifest::WingmanMod,
+                                >(&content)
+                                {
+                                    Ok(modm) => {
+                                        println!("  Loaded: {} ({})", modm.id, path.display());
+                                    }
+                                    Err(e) => {
+                                        eprintln!("  Parse error {}: {}", path.display(), e);
+                                    }
+                                },
+                                Err(e) => {
+                                    eprintln!("  Read error {}: {}", path.display(), e);
+                                }
+                            }
+                        }
+                    }
+
+                    println!("Build complete (stub — patch application coming in future versions)");
+                }
+                None => {
+                    eprintln!(
+                        "Error: Could not detect Project Wingman installation.\n\
+                         Specify --install-path or set PW_INSTALL environment variable."
+                    );
+                    std::process::exit(1);
+                }
+            }
         }
         None => {
             println!(
