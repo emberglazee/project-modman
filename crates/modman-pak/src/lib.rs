@@ -85,6 +85,35 @@ impl PakArchive {
             .map(|p| p.to_string_lossy().to_string())
             .collect()
     }
+
+    /// Unpack all files from the PAK archive to an output directory
+    pub fn unpack(
+        &self,
+        output_dir: impl AsRef<Path>,
+        strip_prefix: &str,
+        _verbose: bool,
+    ) -> Result<(), Error> {
+        let output_dir = output_dir.as_ref();
+        let mount = std::path::PathBuf::from(self.reader.mount_point());
+        let prefix = std::path::Path::new(strip_prefix);
+
+        for entry_path in self.reader.files() {
+            let full_path = mount.join(&entry_path);
+            let relative = full_path.strip_prefix(prefix).unwrap_or(&full_path);
+            let out_path = output_dir.join(relative);
+
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
+            let mut pak_file = std::fs::File::open(&self.path)?;
+            let mut out_file = std::fs::File::create(&out_path)?;
+            self.reader
+                .read_file(&entry_path, &mut pak_file, &mut out_file)?;
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

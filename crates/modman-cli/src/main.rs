@@ -30,9 +30,15 @@ enum Commands {
     Unpack {
         /// Path to the .pak file
         input: String,
-        /// Output directory
+        /// Output directory. Defaults to next to input pak (without .pak extension)
         #[arg(short, long)]
         output: Option<String>,
+        /// Prefix to strip from entry paths
+        #[arg(short, long, default_value = "../../../")]
+        strip_prefix: String,
+        /// Verbose output
+        #[arg(short, long)]
+        verbose: bool,
     },
     /// Pack a directory into a .pak file
     Pack {
@@ -104,10 +110,37 @@ fn main() {
             }
         },
         Some(Commands::Unpack {
-            input: _,
-            output: _,
+            input,
+            output,
+            strip_prefix,
+            verbose,
         }) => {
-            eprintln!("unpack: not yet implemented — coming in 0.3.0");
+            let output_dir = output.unwrap_or_else(|| {
+                std::path::Path::new(&input)
+                    .with_extension("")
+                    .to_string_lossy()
+                    .to_string()
+            });
+            match modman_pak::PakArchive::open(&input) {
+                Ok(pak) => {
+                    let file_count = pak.info().file_count;
+                    println!(
+                        "Unpacking {} files from {} to {} ...",
+                        file_count, input, output_dir
+                    );
+                    match pak.unpack(&output_dir, &strip_prefix, verbose) {
+                        Ok(()) => println!("Done! Unpacked {} files.", file_count),
+                        Err(e) => {
+                            eprintln!("Error: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
         Some(Commands::Pack { input: _ }) => {
             eprintln!("pack: not yet implemented — coming in 0.4.0");
