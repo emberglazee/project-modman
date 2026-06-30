@@ -1,7 +1,11 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "modman", version, about = "Project Modman — Project Wingman Modding Utility")]
+#[command(
+    name = "modman",
+    version,
+    about = "Project Modman — Project Wingman Modding Utility"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -52,7 +56,10 @@ fn main() {
         Some(Commands::List { input: _ }) => {
             eprintln!("list: not yet implemented — coming in 0.2.0");
         }
-        Some(Commands::Unpack { input: _, output: _ }) => {
+        Some(Commands::Unpack {
+            input: _,
+            output: _,
+        }) => {
             eprintln!("unpack: not yet implemented — coming in 0.3.0");
         }
         Some(Commands::Pack { input: _ }) => {
