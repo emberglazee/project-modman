@@ -6,6 +6,7 @@
 //! - Fragment DSL parsing and execution
 //! - Mod merging
 
+pub mod engine;
 pub mod fragment;
 pub mod manifest;
 pub mod patch;
