@@ -6,6 +6,7 @@
 //! - Fragment DSL parsing and execution
 //! - Mod merging
 
+pub mod fragment;
 pub mod manifest;
 
 pub fn version() -> &'static str {
