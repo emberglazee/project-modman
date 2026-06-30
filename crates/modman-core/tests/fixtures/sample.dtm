@@ -1,0 +1,18 @@
+{
+  "_id": "sample-mod",
+  "_meta": { "displayName": "Sample Mod" },
+  "_sicario": { "group": "weapons" },
+  "_vars": { "mult": "2.0" },
+  "assetPatches": {
+    "Game/Data/Weapons.uasset": [{
+      "name": "Weapon tweaks",
+      "patches": [{
+        "description": "Double damage",
+        "template": "datatable:{'DamageStats*'}.{'Damage*'}.<FloatProperty>",
+        "value": "FloatProperty:*2",
+        "type": "modifyPropertyValue"
+      }]
+    }]
+  },
+  "filePatches": {}
+}

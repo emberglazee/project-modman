@@ -6,6 +6,8 @@
 //! - Fragment DSL parsing and execution
 //! - Mod merging
 
+pub mod manifest;
+
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
