@@ -214,7 +214,6 @@ mod tests {
             // data is at the start of .uexp
             uexp_file.seek(std::io::SeekFrom::Start(0)).unwrap();
 
-            // Read properties from .uexp (cooked format may use unversioned serialization)
             println!("Reading properties from .uexp...");
             match crate::properties::read_properties(&mut uexp_file, &names) {
                 Ok(props) => {
@@ -224,7 +223,9 @@ mod tests {
                     }
                 }
                 Err(e) => {
-                    println!("Property read error (expected for non-DataTable): {}", e);
+                    // Get current position for debugging
+                    let pos = uexp_file.stream_position().unwrap_or(0);
+                    eprintln!("  Property parse error at byte {}: {}", pos, e);
                 }
             }
         } else {
