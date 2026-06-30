@@ -315,6 +315,7 @@ dependencies = [
  "clap",
  "modman-core",
  "modman-pak",
+ "modman-uasset",
  "serde_json",
 ]
 

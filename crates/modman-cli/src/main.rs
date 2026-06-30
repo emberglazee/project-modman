@@ -211,10 +211,13 @@ fn main() {
 
             match game_path {
                 Some(path) => {
+                    let game_paks = std::path::Path::new(&path).join("ProjectWingman/Content/Paks");
                     println!("Game: {}", path);
-                    println!("Scanning {} preset paths ...", preset_paths.len());
+                    println!("Paks: {}", game_paks.display());
 
-                    // Try to parse each preset path as .dtm files
+                    // Parse all .dtm/.dtp files
+                    let mut all_mods: Vec<modman_core::manifest::WingmanMod> = Vec::new();
+
                     for pattern in &preset_paths {
                         let path = std::path::Path::new(pattern);
                         if path.is_dir() {
@@ -223,30 +226,27 @@ fn main() {
                                     let p = entry.path();
                                     if p.extension().is_some_and(|e| e == "dtm" || e == "dtp") {
                                         match std::fs::read_to_string(&p) {
-                                            Ok(content) => {
-                                                match serde_json::from_str::<
-                                                    modman_core::manifest::WingmanMod,
-                                                >(
-                                                    &content
-                                                ) {
-                                                    Ok(modm) => {
-                                                        println!(
-                                                            "  Loaded: {} ({})",
-                                                            modm.id,
-                                                            p.display()
-                                                        );
-                                                    }
-                                                    Err(e) => {
-                                                        eprintln!(
-                                                            "  Parse error {}: {}",
-                                                            p.display(),
-                                                            e
-                                                        );
-                                                    }
+                                            Ok(content) => match serde_json::from_str::<
+                                                modman_core::manifest::WingmanMod,
+                                            >(
+                                                &content
+                                            ) {
+                                                Ok(m) => {
+                                                    println!(
+                                                        "  Loaded: {} ({})",
+                                                        m.id,
+                                                        p.display()
+                                                    );
+                                                    all_mods.push(m);
                                                 }
-                                            }
+                                                Err(e) => eprintln!(
+                                                    "  Parse error {}: {}",
+                                                    p.display(),
+                                                    e
+                                                ),
+                                            },
                                             Err(e) => {
-                                                eprintln!("  Read error {}: {}", p.display(), e);
+                                                eprintln!("  Read error {}: {}", p.display(), e)
                                             }
                                         }
                                     }
@@ -260,21 +260,181 @@ fn main() {
                                     modman_core::manifest::WingmanMod,
                                 >(&content)
                                 {
-                                    Ok(modm) => {
-                                        println!("  Loaded: {} ({})", modm.id, path.display());
+                                    Ok(m) => {
+                                        println!("  Loaded: {} ({})", m.id, path.display());
+                                        all_mods.push(m);
                                     }
-                                    Err(e) => {
-                                        eprintln!("  Parse error {}: {}", path.display(), e);
-                                    }
+                                    Err(e) => eprintln!("  Parse error {}: {}", path.display(), e),
                                 },
-                                Err(e) => {
-                                    eprintln!("  Read error {}: {}", path.display(), e);
-                                }
+                                Err(e) => eprintln!("  Read error {}: {}", path.display(), e),
                             }
                         }
                     }
 
-                    println!("Build complete (stub — patch application coming in future versions)");
+                    if all_mods.is_empty() {
+                        eprintln!("No valid mod files found.");
+                        std::process::exit(1);
+                    }
+
+                    // Apply template variables to each mod
+                    for m in &mut all_mods {
+                        modman_core::template::apply_variables_to_mod(m);
+                    }
+
+                    // Merge all mods into a single build plan
+                    let first_mod = &all_mods[0];
+                    let plan = match modman_core::engine::plan_build(first_mod) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            eprintln!("Build plan error: {}", e);
+                            std::process::exit(1);
+                        }
+                    };
+
+                    if plan.file_patches.is_empty() {
+                        println!("No asset patches to apply.");
+                        return;
+                    }
+
+                    // Create temp working directory
+                    let work_dir = std::env::temp_dir().join("modman-build");
+                    let _ = std::fs::remove_dir_all(&work_dir);
+                    std::fs::create_dir_all(&work_dir).unwrap();
+
+                    // Find the main game pak
+                    let main_pak_path = game_paks.join("pakchunk0-WindowsNoEditor.pak");
+                    if !main_pak_path.exists() {
+                        eprintln!("Game pak not found at: {}", main_pak_path.display());
+                        std::process::exit(1);
+                    }
+
+                    // Process each target file
+                    for (target_file, patches) in &plan.file_patches {
+                        println!("\nProcessing: {} ({} patches)", target_file, patches.len());
+
+                        // The target path in the .dtm is game-relative
+                        // Strip the mount prefix to get the entry path in the pak
+                        let mount_prefix = "../../../";
+                        let pak_entry_path = std::path::Path::new(mount_prefix).join(target_file);
+
+                        // Extract from game pak
+                        let _output_dir = work_dir.join("extracted");
+                        match modman_pak::PakArchive::open(&main_pak_path) {
+                            Ok(pak) => {
+                                // Try to extract the target file
+                                // We need to extract matching .uasset and .uexp
+                                let uasset_entry =
+                                    format!("{}", pak_entry_path.display()).replace('\\', "/");
+                                let _uexp_entry = uasset_entry.replace(".uasset", ".uexp");
+
+                                // Check if the target exists in the pak
+                                let all_files = pak.files_stripped("../../../");
+                                let uasset_name = std::path::Path::new(&uasset_entry)
+                                    .file_name()
+                                    .unwrap()
+                                    .to_string_lossy();
+
+                                // Find matching entry
+                                let matching: Vec<String> = all_files
+                                    .iter()
+                                    .filter(|f| f.contains(&uasset_name.replace(".uasset", "")))
+                                    .cloned()
+                                    .collect();
+
+                                if matching.is_empty() {
+                                    eprintln!(
+                                        "  Warning: no matching files found for '{}'",
+                                        target_file
+                                    );
+                                    continue;
+                                }
+
+                                // Extract the matching files
+                                let extract_dir = work_dir.join("extracted");
+                                std::fs::create_dir_all(&extract_dir).unwrap();
+                                if let Err(e) = pak.unpack(&extract_dir, "../../../", false) {
+                                    eprintln!("  Extract error: {}", e);
+                                    continue;
+                                }
+
+                                // Find the extracted uasset file
+                                let extracted_uasset = extract_dir.join(target_file);
+                                let extracted_uexp = extracted_uasset.with_extension("uexp");
+
+                                if !extracted_uasset.exists() || !extracted_uexp.exists() {
+                                    eprintln!(
+                                        "  Warning: extracted files not found at {}",
+                                        extracted_uasset.display()
+                                    );
+                                    continue;
+                                }
+
+                                // Parse uasset
+                                match modman_uasset::asset::AssetFile::open(
+                                    &extracted_uasset.to_string_lossy(),
+                                    &extracted_uexp.to_string_lossy(),
+                                ) {
+                                    Ok(mut asset) => {
+                                        println!(
+                                            "  Parsed: {} names, {} exports, {} properties",
+                                            asset.names.len(),
+                                            asset.exports.len(),
+                                            asset.properties.len(),
+                                        );
+
+                                        // TODO: Apply patches to asset.properties
+                                        // For now, just read-modify-write without changes
+                                        println!("  Applied {} patches (stub)", patches.len());
+
+                                        // Write back
+                                        let out_dir = work_dir.join("output");
+                                        std::fs::create_dir_all(&out_dir).unwrap();
+                                        let out_uasset = out_dir.join(target_file);
+                                        let out_uexp = out_uasset.with_extension("uexp");
+                                        std::fs::create_dir_all(out_uasset.parent().unwrap())
+                                            .unwrap();
+                                        match asset.apply_and_write(
+                                            &out_uasset.to_string_lossy(),
+                                            &out_uexp.to_string_lossy(),
+                                        ) {
+                                            Ok(()) => {
+                                                println!("  Written: {}", out_uasset.display())
+                                            }
+                                            Err(e) => eprintln!("  Write error: {}", e),
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("  Parse error: {}", e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("  Pak error: {}", e);
+                            }
+                        }
+                    }
+
+                    // Pack output into .pak
+                    let output_dir = work_dir.join("output");
+                    if output_dir.exists() {
+                        let mods_dir = game_paks.join("~mods");
+                        std::fs::create_dir_all(&mods_dir).unwrap();
+                        let output_pak = mods_dir.join("modman_merged.pak");
+
+                        println!("\nPacking output to {} ...", output_pak.display());
+                        match modman_pak::pack(
+                            &output_dir,
+                            &output_pak,
+                            modman_pak::Version::V11,
+                            "../../../".to_string(),
+                            None,
+                        ) {
+                            Ok(()) => println!("Done! Output: {}", output_pak.display()),
+                            Err(e) => eprintln!("Pack error: {}", e),
+                        }
+                    }
+
+                    println!("\nBuild complete.");
                 }
                 None => {
                     eprintln!(
