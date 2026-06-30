@@ -44,6 +44,18 @@ enum Commands {
     Pack {
         /// Input directory
         input: String,
+        /// Output path. Defaults to input directory name + .pak
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Mount point
+        #[arg(short, long, default_value = "../../../")]
+        mount_point: String,
+        /// PAK version (V8B or V11, default: V11)
+        #[arg(long, default_value = "V11")]
+        version: String,
+        /// Compression algorithm (zlib, gzip, zstd, lz4)
+        #[arg(long)]
+        compression: Option<String>,
     },
     /// Build a merged mod from Sicario patch files (drop-in replacement for Sicario CLI)
     Build {
@@ -142,8 +154,49 @@ fn main() {
                 }
             }
         }
-        Some(Commands::Pack { input: _ }) => {
-            eprintln!("pack: not yet implemented — coming in 0.4.0");
+        Some(Commands::Pack {
+            input,
+            output,
+            mount_point,
+            version,
+            compression,
+        }) => {
+            let output_path = output.unwrap_or_else(|| format!("{}.pak", input));
+            let ver = match version.to_uppercase().as_str() {
+                "V8B" => modman_pak::Version::V8B,
+                "V11" => modman_pak::Version::V11,
+                _ => {
+                    eprintln!("Error: unsupported version '{}'. Use V8B or V11.", version);
+                    std::process::exit(1);
+                }
+            };
+            let comp: Option<modman_pak::Compression> =
+                compression
+                    .as_deref()
+                    .map(|c| match c.to_lowercase().as_str() {
+                        "zlib" => modman_pak::Compression::Zlib,
+                        "gzip" => modman_pak::Compression::Gzip,
+                        "zstd" => modman_pak::Compression::Zstd,
+                        "lz4" => modman_pak::Compression::LZ4,
+                        _ => {
+                            eprintln!(
+                            "Error: unsupported compression '{}'. Use zlib, gzip, zstd, or lz4.",
+                            c
+                        );
+                            std::process::exit(1);
+                        }
+                    });
+            println!(
+                "Packing {} to {} (v{}, mount: {}) ...",
+                input, output_path, ver, mount_point
+            );
+            match modman_pak::pack(&input, &output_path, ver, mount_point, comp) {
+                Ok(()) => println!("Done!"),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
         Some(Commands::Build {
             preset_paths: _,

@@ -116,6 +116,55 @@ impl PakArchive {
     }
 }
 
+/// Create a .pak file from a directory
+pub fn pack(
+    input_dir: impl AsRef<Path>,
+    output_path: impl AsRef<Path>,
+    version: Version,
+    mount_point: String,
+    compression: Option<Compression>,
+) -> Result<(), Error> {
+    let input_dir = input_dir.as_ref();
+    let output_path = output_path.as_ref();
+
+    let mut paths = Vec::new();
+    collect_files(&mut paths, input_dir)?;
+    paths.sort();
+
+    let compress_vec: Vec<Compression> = compression.into_iter().collect();
+    let mut pak = repak::PakBuilder::new()
+        .compression(compress_vec.clone())
+        .writer(
+            std::io::BufWriter::new(std::fs::File::create(output_path)?),
+            version,
+            mount_point,
+            None,
+        );
+
+    for path in &paths {
+        let relative = path.strip_prefix(input_dir).expect("path under input dir");
+        let data = std::fs::read(path)?;
+        let path_str = relative.to_string_lossy().replace('\\', "/");
+        pak.write_file(&path_str, compression.is_some(), data)?;
+    }
+
+    pak.write_index()?;
+    Ok(())
+}
+
+fn collect_files(paths: &mut Vec<std::path::PathBuf>, dir: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files(paths, &path)?;
+        } else {
+            paths.push(path);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
