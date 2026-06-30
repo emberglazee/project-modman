@@ -1,4 +1,4 @@
-# ModMan — Project Wingman Modding Utility
+# Project Modman — Project Wingman Modding Utility
 
 **Date:** 2026-06-30
 **Status:** Approved design, pre-implementation
@@ -6,7 +6,7 @@
 
 ## Overview
 
-ModMan is a Rust modding utility for Project Wingman (PW), designed as a drop-in CLI replacement for Project Sicario (C# .NET) with the long-term goal of becoming a broader PW modding toolkit.
+Project Modman is a Rust modding utility for Project Wingman (PW), designed as a drop-in CLI replacement for Project Sicario (C# .NET) with the long-term goal of becoming a broader PW modding toolkit.
 
 - **v1.0 target:** Drop-in CLI replacement for Sicario's CLI — reads `.dtm` patch files, merges mods, applies uasset patches, packs result into `.pak` files
 - **v2.0 (future):** Broader PW modding toolkit with additional capabilities beyond Sicario's scope
@@ -17,7 +17,7 @@ ModMan is a Rust modding utility for Project Wingman (PW), designed as a drop-in
 The project uses a Cargo workspace with four crates, each independently testable:
 
 ```
-project-modman/
+ProjectModman/
 ├── Cargo.toml                      # workspace root
 ├── .github/workflows/
 │   ├── build.yml                   # CI: build on push to main
@@ -75,7 +75,7 @@ modman-cli
         └── repak             (externally managed)
 ```
 
-`modman-uasset` is fully standalone — no dependencies on other modman crates — so it can be published independently if desired.
+`modman-uasset` is fully standalone — no dependencies on other modman crates.
 
 ## Data Flow & Pipeline Architecture
 
