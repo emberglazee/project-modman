@@ -99,7 +99,11 @@ impl PakArchive {
 
         for entry_path in self.reader.files() {
             let full_path = mount.join(&entry_path);
-            let relative = full_path.strip_prefix(prefix).unwrap_or(&full_path);
+            let relative = if strip_prefix.is_empty() {
+                std::path::Path::new(&entry_path)
+            } else {
+                full_path.strip_prefix(prefix).unwrap_or(&full_path)
+            };
             let out_path = output_dir.join(relative);
 
             if let Some(parent) = out_path.parent() {
