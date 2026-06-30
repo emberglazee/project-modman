@@ -7,6 +7,7 @@ pub mod export;
 pub mod header;
 pub mod names;
 pub mod properties;
+pub mod serialize;
 
 use std::io::Read;
 
