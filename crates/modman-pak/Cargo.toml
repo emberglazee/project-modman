@@ -1,0 +1,10 @@
+[package]
+name = "modman-pak"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+repak = { git = "https://github.com/trumank/repak", tag = "v0.2.3" }

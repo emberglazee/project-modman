@@ -3,7 +3,6 @@ references/
 
 # Rust build artifacts
 target/
-Cargo.lock
 
 # Editor files
 .vscode/
