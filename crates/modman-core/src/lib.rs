@@ -9,6 +9,7 @@
 pub mod fragment;
 pub mod manifest;
 pub mod patch;
+pub mod template;
 
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
