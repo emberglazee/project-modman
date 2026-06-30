@@ -313,6 +313,7 @@ name = "modman"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "modman-pak",
 ]
 
 [[package]]
@@ -328,6 +329,7 @@ name = "modman-pak"
 version = "0.1.0"
 dependencies = [
  "repak",
+ "thiserror",
 ]
 
 [[package]]
