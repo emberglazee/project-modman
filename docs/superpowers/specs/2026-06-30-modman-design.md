@@ -136,34 +136,113 @@ Key fields:
 
 ### Fragment DSL
 
-The `template` string is a parsing expression that navigates into the uasset structure:
+The `template` field in an asset patch is a parsing expression that navigates into the uasset structure to find the data to modify. Format:
 
 ```
-DataTable("TableName") > PropertyValue("FloatProperty":*):*
+type_loader:filter.filter.filter...
 ```
 
-Parsed as a chain of **fragments**, each filtering/matching the current data set:
-- `DataTable(name)` — select a named data table
-- `PropertyValue(type:value)` — match properties by type and value
-- `Struct(name)` — descend into a struct property
-- `Array(index)` — select array element by index
-- `Flatten()` — flatten nested structures
+**Type loaders** (how data is initially extracted from the uasset):
+
+| Loader | Syntax | Example | Description |
+|--------|--------|---------|-------------|
+| `DataTable` | `datatable("TableName")` | `datatable:{'BaseStats*'}` | Load rows from a named DataTable |
+| `Raw` | `raw` or `raw(0)` | `raw:<StructProperty>` | Load raw properties from the asset (optional category index) |
+
+**Fragment chain** — dot-separated filters, each taking `IEnumerable<PropertyData>` and returning a filtered subset:
+
+| Syntax | Fragment | Example | Description |
+|--------|----------|---------|-------------|
+| `['name']` or `[name]` | StructFragment | `['F-15C']`, `[!hidden]` | Match properties by name. `'name*'` for prefix wildcard. `!` inverts match |
+| `[N]` | ArrayFragment | `[0]`, `[2]` | Select Nth element from current result set (0-indexed) |
+| `{name}` | StructPropertyFragment | `{'BaseStats*'}`, `{'Speed'}` | Descend into structs, return children matching name. Supports `*` wildcard |
+| `{Type:{Name=Value}}` | StructMatchFragment | `{*:{'Subtitle*'='0_Subtitle*'}}` | Descend into structs where child property matches conditions |
+| `[[N]]` | ArrayPropertyFragment | `[[1]]` | Select Nth entry from inside ArrayProperty values |
+| `[[*]]` | ArrayFlattenFragment | `[[*]]` | Flatten array contents into the result stream |
+| `<type>` | PropertyValueFragment | `<FloatProperty>`, `<StructProperty>` | Filter by UE4 property type |
+| `<type=value>` | PropertyValueFragment | `<IntProperty=2>`, `<FloatProperty=1.5>` | Filter by type AND value |
+| `<type::value>` | EnumValueFragment | `<S_CannonType::NewEnumerator2>` | Filter enum properties by enum type + member |
+| `<type=val1\|val2>` | NumberCollectionValueFragment | `<IntProperty=2\|4\|6>` | Filter by multiple numeric values |
+| `[*]` | AnyFragment | `[*]` | Pass through everything (match-all) |
+| `{**}` | FlattenFragment | `{**}` | Flatten nested structure levels |
+
+**Example templates from real Sicario mods:**
+
+```
+# Match CanUseAoA across all aircraft in DB_Aircraft datatable
+datatable:{'BaseStats*'}.{'CanUseAoA*'}
+
+# Match F-15C's 2nd hardpoint slot's IntProperty with value 2
+datatable:['F-15C'].[0].{'HardpointSlots*'}.[[1]].<IntProperty='2'>
+
+# Double MaxSpeed in BaseStats for all aircraft
+datatable:{'BaseStats*'}.{'MaxSpeed*'}.<FloatProperty>
+
+# Match all aircraft rows and set their Role TextProperty
+datatable:['F-16C'].[0].{'Role*'}.<TextProperty>
+
+# Clone MSSL row to create MSTM row
+datatable:[*]
+
+# Match F-16C's first skin slot object reference
+datatable:['F-16C'].[0].{'SkinLibraryLegacy*'}.[[0]]
+```
+
+**Patch value format:** `Type:value`
+
+| Patch type | Value format | Example |
+|------------|--------------|---------|
+| `propertyValue` | `Type:value` | `BoolProperty:true`, `FloatProperty:2500` |
+| `modifyPropertyValue` | `Type:op value(range)` | `FloatProperty:*2`, `IntProperty:+6(0-10)` |
+| `arrayPropertyValue` | `Type:[items]` | `IntProperty:[2,2,4,1]`, `IntProperty:+[2]` |
+| `textProperty` | `'key':'value'` or `*:'text'` | `*:'Multirole'` |
+| `duplicateEntry` | `'Source'>'Target'` | `'MSSL'>'MSTM'` |
+| `duplicateProperty` | `'Source'>'Target'` | `'SourceName'>'TargetName'` |
+| `objectRef` | `'Name':'Path'` | `'F16Custom_01':'/Game/.../F16Custom_01'` |
+
+**Implementation approach in Rust:**
+
+The fragment parser will be a simple recursive descent parser (no parser combinator library needed — the grammar is small enough). Each fragment type has its own `Parser<IAssetParserFragment>` implementation, and the fragment chain is parsed as a dot-separated sequence. The chain is then applied sequentially to the property data stream.
+
+```rust
+// Fragment trait
+trait Fragment {
+    fn match_properties(&self, input: &[PropertyData]) -> Vec<PropertyData>;
+}
+
+// Example: StructPropertyFragment
+struct StructPropertyFragment {
+    name_pattern: String,   // "BaseStats*" → prefix match, "CanUseAoA" → exact
+}
+
+impl Fragment for StructPropertyFragment {
+    fn match_properties(&self, input: &[PropertyData]) -> Vec<PropertyData> {
+        input.iter()
+            .filter_map(|p| p.as_struct())
+            .flat_map(|s| s.children())
+            .filter(|c| matches_pattern(&c.name, &self.name_pattern))
+            .collect()
+    }
+}
+```
+
+The Parser struct takes a template string and returns a `TemplateContext` containing the type loader name + parameter and an ordered list of fragments.
 
 ### Patch types (from Sicario)
 
-Implemented incrementally — all 9 Sicario-compatible types for v1.0:
+Implemented incrementally — all Sicario-compatible types for v1.0:
 
-| Type | Operation | Example value |
-|------|-----------|---------------|
-| `propertyValue` | Set a property to a value | `IntProperty:42` |
-| `modifyPropertyValue` | Arithmetic modification | `FloatProperty:*2.0` |
-| `arrayPropertyValue` | Modify array element values | `0:IntProperty:10` |
-| `duplicateProperty` | Duplicate a property within a struct | `"source" > "target"` |
-| `duplicateEntry` | Duplicate table entries | `"SourceName":0 > "TargetName":0` |
-| `duplicateArrayItem` | Duplicate array items by index | `0>1` |
-| `deleteEntry` | Delete matching entries | `EntryName` |
-| `objectRef` | Set object references | `Package.Name` |
-| `textProperty` | Modify text/string properties | `ns:key=value` |
+| Type | Operation | Value format | Example |
+|------|-----------|-------------|---------|
+| `propertyValue` | Set property to a value | `Type:value` | `BoolProperty:true` |
+| `modifyPropertyValue` | Arithmetic modification (+,-,*,/) | `Type:op val(range)` | `FloatProperty:*2`, `IntProperty:+6(0-10)` |
+| `arrayPropertyValue` | Modify array property values | `Type:[items]` | `IntProperty:[2,2,4,1]` |
+| `textProperty` | Set TextProperty value | `'key':'val'` or `*:'text'` | `*:'Multirole'` |
+| `duplicateEntry` | Clone a datatable row | `'Source'>'Target'` | `'MSSL'>'MSTM'` |
+| `duplicateProperty` | Clone a property within a struct | `'Source'>'Target'` | `'SourceName'>'TargetName'` |
+| `duplicateArrayItem` | Clone array entry by index | `SrcIndex>DstIndex` | `0>1` |
+| `deleteEntry` | Delete matching entries | `EntryName` | `ObsoleteRow` |
+| `objectRef` | Change object reference links | `'Name':'Path'` | `'F16Custom_01':'/Game/...'` |
 
 ### Templating
 
