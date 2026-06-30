@@ -1,0 +1,17 @@
+# References - standalone cloned repos
+references/
+
+# Rust build artifacts
+target/
+Cargo.lock
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
