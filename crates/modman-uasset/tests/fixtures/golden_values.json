@@ -1,0 +1,279 @@
+[
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "FamilyID"
+  ],
+  "kind": "s",
+  "value": "mig15"
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "Price"
+  ],
+  "kind": "i",
+  "value": 17500
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "UGC_identifier"
+  ],
+  "kind": "s",
+  "value": "mg15"
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "Region"
+  ],
+  "kind": "ben",
+  "value": "WeaponRegionModel::NewEnumerator6"
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "AircraftName"
+  ],
+  "kind": "tx",
+  "value": [
+   "971DB28A4E8E3BAAC9C2BCB851B9B90B",
+   "MG-15"
+  ]
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "AircraftDescription"
+  ],
+  "kind": "tx",
+  "value": [
+   null,
+   null
+  ]
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "AircraftModel"
+  ],
+  "kind": "ob",
+  "value": -301
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "HasGun"
+  ],
+  "kind": "b",
+  "value": true
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "HardpointSlots"
+  ],
+  "kind": "ac",
+  "value": 2
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "HardpointCompatibilityList"
+  ],
+  "kind": "ac",
+  "value": 2
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "WeaponList"
+  ],
+  "kind": "ac",
+  "value": 2
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "FixedLoadout"
+  ],
+  "kind": "b",
+  "value": true
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "BoneDetails",
+   "AfterBurnerStyle"
+  ],
+  "kind": "ben",
+  "value": "E_AfterBurnerStyle::NewEnumerator0"
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "BoneDetails",
+   "PilotSeatOffset"
+  ],
+  "kind": "cf",
+  "value": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "BaseStats",
+   "MaxSpeed"
+  ],
+  "kind": "f",
+  "value": 1300.0
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "BaseStats",
+   "CanUseAoA"
+  ],
+  "kind": "b",
+  "value": false
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "BaseStats",
+   "CannonType"
+  ],
+  "kind": "ben",
+  "value": "S_CannonType::NewEnumerator0"
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Mig-15",
+  "path": [
+   "ID",
+   "ID"
+  ],
+  "kind": "s",
+  "value": "MIG-15"
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "T-21",
+  "path": [
+   "BoneDetails",
+   "PilotSeatOffset"
+  ],
+  "kind": "cf",
+  "value": [
+   -10.0,
+   0.0,
+   5.0
+  ]
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "T-21",
+  "path": [
+   "BaseStats",
+   "MaxSpeed"
+  ],
+  "kind": "f",
+  "value": 2500.0
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "F-15C",
+  "path": [
+   "Price"
+  ],
+  "kind": "i",
+  "value": 54000
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "F-15C",
+  "path": [
+   "BaseStats",
+   "MaxSpeed"
+  ],
+  "kind": "f",
+  "value": 2500.0
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "F-15C",
+  "path": [
+   "BaseStats",
+   "RollSpeed"
+  ],
+  "kind": "f",
+  "value": 170.0
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "Su-57",
+  "path": [
+   "BaseStats",
+   "MaxSpeed"
+  ],
+  "kind": "f",
+  "value": 2500.0
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "AV-8_2",
+  "path": [
+   "Price"
+  ],
+  "kind": "i",
+  "value": 51000
+ },
+ {
+  "table": "DB_Aircraft",
+  "row": "AV-8_2",
+  "path": [
+   "UGC_identifier"
+  ],
+  "kind": "s",
+  "value": "accipiter2"
+ },
+ {
+  "table": "DB_ProjectWingmanLevelList",
+  "row": "PGF_2017",
+  "path": [
+   "LevelName"
+  ],
+  "kind": "ac",
+  "value": 1
+ },
+ {
+  "table": "DB_ProjectWingmanLevelList",
+  "row": "PGF_2017",
+  "path": [
+   "ID"
+  ],
+  "kind": "s",
+  "value": "showfloor01"
+ }
+]
