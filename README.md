@@ -4,12 +4,21 @@
 
 ## Status
 
-**Pre-release (0.1.0).** This is a scaffold — the CLI exists but commands are not yet implemented.
+**Pre-1.0, in development.** Working today: PAK I/O (`info`, `list`, `unpack`, `pack`), `.dtm`/`.dtp` patch parsing, Fragment DSL parsing, patch-type parsing, template substitution. In progress: the uasset edit engine and the Sicario-compatible merge. **Not yet usable for real mods** — do not point `build` at a game install until the asset round-trip gate lands.
 
-## Goals
+## V1 Scope — 1:1 parity with the Project Sicario merger
 
-- **v1.0:** Drop-in CLI replacement for Project Sicario — read `.dtm` patches, merge mods, apply uasset patches, pack `.pak` files. No .NET dependency.
-- **v2.0 (future):** Broader PW modding toolkit.
+**The v1 goal is 1:1 parity with the Sicario merger — no more, no less.**
+
+A drop-in replacement for the Sicario merger (`SicarioPatch.Loader`) against Project Wingman 2.1.1A / UE 4.27 / Pak V11:
+
+- **Inputs:** identical `.dtm`/`.dtp` WingmanMod JSON, with `_vars`/`_inputs` templating.
+- **Patch semantics:** every Sicario fragment type, every Sicario patch type, identical matching and value behavior.
+- **Merge semantics:** identical multi-mod merging (conflicts/dedup) to Sicario's engine.
+- **Output:** a Pak V11 mod pack (mount `../../../`) for the game's `~mods/` directory.
+- **Zero .NET dependency** — single native binary.
+
+Nothing more (no new formats, no new behaviors, no UI), nothing less.
 
 ## Building
 
