@@ -1,47 +1,66 @@
 //! Export map entries for UE4 uasset files.
 //!
-//! Each export describes an object serialized within the uasset/uexp.
+//! UE4.27 cooked entries are **104 bytes**; this layout is verified against both
+//! UAssetAPI's `Export.ReadExportMapEntry` and real PW assets (see [`crate::walk`]).
 
 use crate::names::FName;
 use crate::Error;
 use std::io::Read;
 
-/// An entry in the export map
+/// Size of a cooked UE4.27 export-map entry in bytes.
+pub const EXPORT_ENTRY_SIZE: usize = 104;
+
+/// An entry in the export map.
 #[derive(Debug, Clone)]
 pub struct ExportEntry {
-    pub object_name: FName,
-    pub outer_index: FPackageIndex,
     pub class_index: FPackageIndex,
     pub super_index: FPackageIndex,
     pub template_index: FPackageIndex,
+    pub outer_index: FPackageIndex,
+    pub object_name: FName,
     pub object_flags: u32,
     pub serial_size: i64,
     pub serial_offset: i64,
+    pub b_forced_export: bool,
+    pub b_not_for_client: bool,
+    pub b_not_for_server: bool,
+    pub package_flags: u32,
+    pub b_not_always_loaded_for_editor_game: bool,
+    pub b_is_asset: bool,
+    pub first_export_dependency_offset: i32,
+    pub serialization_before_serialization_dependencies_size: i32,
+    pub create_before_serialization_dependencies_size: i32,
+    pub serialization_before_create_dependencies_size: i32,
+    pub create_before_create_dependencies_size: i32,
 }
 
 impl ExportEntry {
-    /// Read an export entry from the current stream position
+    /// Read one export entry from the current stream position (UE4.27 layout, 104 bytes).
     pub fn read<R: Read>(reader: &mut R) -> Result<Self, Error> {
-        let object_name = FName::read(reader)?;
-        let outer_index = FPackageIndex::read(reader)?;
-        let class_index = FPackageIndex::read(reader)?;
-        let super_index = FPackageIndex::read(reader)?;
-        let template_index = FPackageIndex::read(reader)?;
-        let object_flags = read_u32(reader)?;
-        let serial_size = read_i64(reader)?;
-        let serial_offset = read_i64(reader)?;
-        // Skip optional fields (script serial offsets, forced export flags, etc.)
-        // For cooked UE4 assets, these may not be present or use defaults
-
         Ok(Self {
-            object_name,
-            outer_index,
-            class_index,
-            super_index,
-            template_index,
-            object_flags,
-            serial_size,
-            serial_offset,
+            class_index: FPackageIndex::read(reader)?,
+            super_index: FPackageIndex::read(reader)?,
+            template_index: FPackageIndex::read(reader)?,
+            outer_index: FPackageIndex::read(reader)?,
+            object_name: FName::read(reader)?,
+            object_flags: read_u32(reader)?,
+            serial_size: read_i64(reader)?,
+            serial_offset: read_i64(reader)?,
+            b_forced_export: read_bool_int(reader)?,
+            b_not_for_client: read_bool_int(reader)?,
+            b_not_for_server: read_bool_int(reader)?,
+            // 16-byte PackageGuid is not needed for navigation
+            package_flags: {
+                skip(reader, 16)?;
+                read_u32(reader)?
+            },
+            b_not_always_loaded_for_editor_game: read_bool_int(reader)?,
+            b_is_asset: read_bool_int(reader)?,
+            first_export_dependency_offset: read_i32(reader)?,
+            serialization_before_serialization_dependencies_size: read_i32(reader)?,
+            create_before_serialization_dependencies_size: read_i32(reader)?,
+            serialization_before_create_dependencies_size: read_i32(reader)?,
+            create_before_create_dependencies_size: read_i32(reader)?,
         })
     }
 }
@@ -99,8 +118,28 @@ fn read_u32<R: Read>(reader: &mut R) -> Result<u32, Error> {
     Ok(u32::from_le_bytes(buf))
 }
 
+fn read_i32<R: Read>(reader: &mut R) -> Result<i32, Error> {
+    let mut buf = [0u8; 4];
+    reader.read_exact(&mut buf)?;
+    Ok(i32::from_le_bytes(buf))
+}
+
 fn read_i64<R: Read>(reader: &mut R) -> Result<i64, Error> {
     let mut buf = [0u8; 8];
     reader.read_exact(&mut buf)?;
     Ok(i64::from_le_bytes(buf))
+}
+
+fn read_bool_int<R: Read>(reader: &mut R) -> Result<bool, Error> {
+    match read_i32(reader)? {
+        0 => Ok(false),
+        1 => Ok(true),
+        other => Err(Error::Parse(format!("invalid boolean-int value {other}"))),
+    }
+}
+
+fn skip<R: Read>(reader: &mut R, n: usize) -> Result<(), Error> {
+    let mut buf = vec![0u8; n];
+    reader.read_exact(&mut buf)?;
+    Ok(())
 }

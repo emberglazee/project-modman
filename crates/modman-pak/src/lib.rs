@@ -118,6 +118,21 @@ impl PakArchive {
 
         Ok(())
     }
+
+    /// Extract a single entry (raw pak path, e.g. "ProjectWingman/Content/...") to an
+    /// output file. Much cheaper than unpacking the whole archive.
+    pub fn extract_entry(&self, entry_path: &str, out_path: impl AsRef<Path>) -> Result<(), Error> {
+        let out_path = out_path.as_ref();
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let entry = entry_path.to_string();
+        let mut pak_file = std::fs::File::open(&self.path)?;
+        let mut out_file = std::fs::File::create(out_path)?;
+        self.reader
+            .read_file(&entry, &mut pak_file, &mut out_file)?;
+        Ok(())
+    }
 }
 
 /// Create a .pak file from a directory

@@ -201,35 +201,5 @@ mod tests {
                 i, exp.serial_offset, exp.serial_size
             );
         }
-
-        // Read export data from .uexp file
-        let mut uexp_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        uexp_path.push("tests/fixtures");
-        uexp_path.push("test.uexp");
-
-        if uexp_path.exists() {
-            let mut uexp_file = File::open(&uexp_path).unwrap();
-            // .uexp file starts at offset 0 — serial_offset in the header
-            // is relative to the .uasset file, but for paired files the
-            // data is at the start of .uexp
-            uexp_file.seek(std::io::SeekFrom::Start(0)).unwrap();
-
-            println!("Reading properties from .uexp...");
-            match crate::properties::read_properties(&mut uexp_file, &names) {
-                Ok(props) => {
-                    println!("Found {} properties:", props.len());
-                    for prop in &props {
-                        println!("  {} ({}): {:?}", prop.name, prop.type_name, prop.value);
-                    }
-                }
-                Err(e) => {
-                    // Get current position for debugging
-                    let pos = uexp_file.stream_position().unwrap_or(0);
-                    eprintln!("  Property parse error at byte {}: {}", pos, e);
-                }
-            }
-        } else {
-            println!("No .uexp fixture at {:?}", uexp_path);
-        }
     }
 }

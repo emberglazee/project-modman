@@ -4,7 +4,7 @@
 
 ## Status
 
-**Pre-1.0, in development.** Working today: PAK I/O (`info`, `list`, `unpack`, `pack`), `.dtm`/`.dtp` patch parsing, Fragment DSL parsing, patch-type parsing, template substitution. In progress: the uasset edit engine and the Sicario-compatible merge. **Not yet usable for real mods** — do not point `build` at a game install until the asset round-trip gate lands.
+**Pre-1.0, in development.** Working today: PAK I/O (`info`, `list`, `unpack`, `pack`), `.dtm`/`.dtp` patch parsing, Fragment DSL parsing, patch-type parsing, template substitution, and a **verified DataTable engine** (`modman-uasset::walk` + `edit` — byte-exact walker with byte ranges, plus same-size splice editing; fixture-gated against real PW assets). In progress: patch application + merge (the Sicario-parity A-layer). **Not yet usable for real mods** — `build` deliberately writes no output until patch application lands.
 
 ## V1 Scope — 1:1 parity with the Project Sicario merger
 

@@ -308,133 +308,99 @@ fn main() {
                         std::process::exit(1);
                     }
 
-                    // Process each target file
+                    // Engine preview: locate + parse each target asset from the game pak with
+                    // the verified DataTable walker. Patch application and merge are the next
+                    // milestone (see README, V1 scope) — nothing is written to disk until then,
+                    // so no broken mod output can be produced.
+                    let pak = match modman_pak::PakArchive::open(&main_pak_path) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            eprintln!("Pak error: {}", e);
+                            std::process::exit(1);
+                        }
+                    };
+                    let all_files = pak.files();
+
+                    let extract_dir = work_dir.join("extracted");
+                    std::fs::create_dir_all(&extract_dir).unwrap();
+
+                    let mut ok_targets = 0usize;
                     for (target_file, patches) in &plan.file_patches {
                         println!("\nProcessing: {} ({} patches)", target_file, patches.len());
 
-                        // The target path in the .dtm is game-relative
-                        // Strip the mount prefix to get the entry path in the pak
-                        let mount_prefix = "../../../";
-                        let pak_entry_path = std::path::Path::new(mount_prefix).join(target_file);
+                        let needle = target_file
+                            .trim_start_matches("../../../")
+                            .replace('\\', "/");
+                        let entry = all_files
+                            .iter()
+                            .find(|f| f.as_str() == needle)
+                            .or_else(|| all_files.iter().find(|f| f.ends_with(&needle)));
 
-                        // Extract from game pak
-                        let _output_dir = work_dir.join("extracted");
-                        match modman_pak::PakArchive::open(&main_pak_path) {
-                            Ok(pak) => {
-                                // Try to extract the target file
-                                // We need to extract matching .uasset and .uexp
-                                let uasset_entry =
-                                    format!("{}", pak_entry_path.display()).replace('\\', "/");
-                                let _uexp_entry = uasset_entry.replace(".uasset", ".uexp");
-
-                                // Check if the target exists in the pak
-                                let all_files = pak.files_stripped("../../../");
-                                let uasset_name = std::path::Path::new(&uasset_entry)
-                                    .file_name()
-                                    .unwrap()
-                                    .to_string_lossy();
-
-                                // Find matching entry
-                                let matching: Vec<String> = all_files
-                                    .iter()
-                                    .filter(|f| f.contains(&uasset_name.replace(".uasset", "")))
-                                    .cloned()
-                                    .collect();
-
-                                if matching.is_empty() {
-                                    eprintln!(
-                                        "  Warning: no matching files found for '{}'",
-                                        target_file
-                                    );
-                                    continue;
-                                }
-
-                                // Extract the matching files
-                                let extract_dir = work_dir.join("extracted");
-                                std::fs::create_dir_all(&extract_dir).unwrap();
-                                if let Err(e) = pak.unpack(&extract_dir, "../../../", false) {
-                                    eprintln!("  Extract error: {}", e);
-                                    continue;
-                                }
-
-                                // Find the extracted uasset file
-                                let extracted_uasset = extract_dir.join(target_file);
-                                let extracted_uexp = extracted_uasset.with_extension("uexp");
-
-                                if !extracted_uasset.exists() || !extracted_uexp.exists() {
-                                    eprintln!(
-                                        "  Warning: extracted files not found at {}",
-                                        extracted_uasset.display()
-                                    );
-                                    continue;
-                                }
-
-                                // Parse uasset
-                                match modman_uasset::asset::AssetFile::open(
-                                    &extracted_uasset.to_string_lossy(),
-                                    &extracted_uexp.to_string_lossy(),
-                                ) {
-                                    Ok(mut asset) => {
-                                        println!(
-                                            "  Parsed: {} names, {} exports, {} properties",
-                                            asset.names.len(),
-                                            asset.exports.len(),
-                                            asset.properties.len(),
-                                        );
-
-                                        // TODO: Apply patches to asset.properties
-                                        // For now, just read-modify-write without changes
-                                        println!("  Applied {} patches (stub)", patches.len());
-
-                                        // Write back
-                                        let out_dir = work_dir.join("output");
-                                        std::fs::create_dir_all(&out_dir).unwrap();
-                                        let out_uasset = out_dir.join(target_file);
-                                        let out_uexp = out_uasset.with_extension("uexp");
-                                        std::fs::create_dir_all(out_uasset.parent().unwrap())
-                                            .unwrap();
-                                        match asset.apply_and_write(
-                                            &out_uasset.to_string_lossy(),
-                                            &out_uexp.to_string_lossy(),
-                                        ) {
-                                            Ok(()) => {
-                                                println!("  Written: {}", out_uasset.display())
-                                            }
-                                            Err(e) => eprintln!("  Write error: {}", e),
-                                        }
-                                    }
-                                    Err(e) => {
-                                        eprintln!("  Parse error: {}", e);
-                                    }
-                                }
+                        let entry = match entry {
+                            Some(e) => e.clone(),
+                            None => {
+                                eprintln!("  Warning: no matching pak entry for '{}'", target_file);
+                                continue;
                             }
+                        };
+
+                        let stem = std::path::Path::new(&entry)
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "asset".to_string());
+                        let local_uasset = extract_dir.join(format!("{stem}.uasset"));
+                        let local_uexp = extract_dir.join(format!("{stem}.uexp"));
+
+                        if let Err(e) = pak.extract_entry(&entry, &local_uasset) {
+                            eprintln!("  Extract error ({}): {}", entry, e);
+                            continue;
+                        }
+                        let uexp_entry = entry.replace(".uasset", ".uexp");
+                        if let Err(e) = pak.extract_entry(&uexp_entry, &local_uexp) {
+                            eprintln!("  Note: no .uexp companion for '{}' ({})", entry, e);
+                            continue;
+                        }
+
+                        let ua = match std::fs::read(&local_uasset) {
+                            Ok(v) => v,
                             Err(e) => {
-                                eprintln!("  Pak error: {}", e);
+                                eprintln!("  Read error: {}", e);
+                                continue;
                             }
+                        };
+                        let ue = match std::fs::read(&local_uexp) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                eprintln!("  Read error: {}", e);
+                                continue;
+                            }
+                        };
+                        match modman_uasset::walk::DataTable::walk_bytes(&ua, &ue) {
+                            Ok(dt) => {
+                                ok_targets += 1;
+                                println!(
+                                    "  Parsed: {} rows, {} properties, leftover={}, size checks {}",
+                                    dt.rows.len(),
+                                    dt.count_props(),
+                                    dt.leftover,
+                                    if dt.size_mismatches.is_empty() {
+                                        "OK"
+                                    } else {
+                                        "MISMATCH"
+                                    }
+                                );
+                                println!("  Patch application pending (A-layer milestone); no output written.");
+                            }
+                            Err(e) => eprintln!("  Walk error: {}", e),
                         }
                     }
 
-                    // Pack output into .pak
-                    let output_dir = work_dir.join("output");
-                    if output_dir.exists() {
-                        let mods_dir = game_paks.join("~mods");
-                        std::fs::create_dir_all(&mods_dir).unwrap();
-                        let output_pak = mods_dir.join("modman_merged.pak");
-
-                        println!("\nPacking output to {} ...", output_pak.display());
-                        match modman_pak::pack(
-                            &output_dir,
-                            &output_pak,
-                            modman_pak::Version::V11,
-                            "../../../".to_string(),
-                            None,
-                        ) {
-                            Ok(()) => println!("Done! Output: {}", output_pak.display()),
-                            Err(e) => eprintln!("Pack error: {}", e),
-                        }
-                    }
-
-                    println!("\nBuild complete.");
+                    println!(
+                        "\nEngine preview complete: {}/{} target asset(s) parsed. Patch application + \
+                         merge are the next milestone — no mod output was written.",
+                        ok_targets,
+                        plan.file_patches.len()
+                    );
                 }
                 None => {
                     eprintln!(
