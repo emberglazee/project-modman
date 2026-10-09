@@ -2,16 +2,32 @@ name: Rust Build (Reusable)
 
 on:
   workflow_call:
+    inputs:
+      # Commit to build. Callers that need a specific commit (the release
+      # workflow builds the version-bump commit) pass it here; everyone else
+      # gets the caller's own SHA.
+      ref:
+        description: 'Commit to check out (defaults to the caller SHA)'
+        required: false
+        type: string
 
 jobs:
+  # ── Static gate: formatting + lint on both Linux and Windows — the ──
+  # ── Windows leg exists so `cfg(windows)` code is actually linted.    ──
   check:
-    name: Check
-    runs-on: ubuntu-latest
+    name: Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: clippy, rustfmt
 
@@ -22,34 +38,82 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy -- --deny warnings
+        run: cargo clippy --workspace --all-targets --locked -- --deny warnings
 
-      - name: Test
-        run: cargo test
-        env:
-          RUST_BACKTRACE: 1
-
-  build:
-    name: Build (${{ matrix.os }} - ${{ matrix.target }})
+  # ── Native test matrix: every target that gets a release binary, tested on
+  # ── its own runner. macOS amd64 is excluded — it is a cross-build from the
+  # ── arm64 macos runner (no Intel mac runners), not a native target. ──
+  test:
+    name: Test (${{ matrix.os }} - ${{ matrix.target }})
     needs: check
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            suffix: linux
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            suffix: win.exe
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
           - os: macos-latest
             target: aarch64-apple-darwin
-            suffix: macos-arm64
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.0
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Tests
+        run: cargo test --workspace --locked
+        env:
+          RUST_BACKTRACE: 1
+
+  # ── Release builds: only after ALL native tests pass (check + 5-target ──
+  # ── matrix). Builds 6 combos; asset names follow modman-<os>-<arch>[.exe]. ──
+  build:
+    name: Build (${{ matrix.os }} - ${{ matrix.target }})
+    needs: [check, test]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # Native builds on each platform/arch. Only macOS amd64 is
+          # cross-built (from the arm64 macos runner — GitHub's Intel mac
+          # runners are scarce). Asset names follow `modman-<os>-<arch>[.exe]`.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: modman-linux-amd64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: modman-linux-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: modman-win-amd64.exe
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            asset: modman-win-arm64.exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: modman-macos-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset: modman-macos-amd64
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: ${{ matrix.target }}
 
@@ -57,36 +121,50 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          # --locked: the release bump edits Cargo.lock (version lines only);
+          # if that edit ever left the lock inconsistent, this fails the
+          # release instead of cargo silently repairing it at build time.
+          cargo build --release --locked --target ${{ matrix.target }} -p modman
+
+      # ── Windows smoke test: the binary must run, and (with the static-CRT ──
+      # ── config in .cargo/config.toml) must not depend on the Visual C++  ──
+      # ── Redistributable — checked with dumpbin.                            ──
+      - name: Smoke Test (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "target/${{ matrix.target }}/release/modman.exe"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $dumpbinCandidates = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe'
+          if ($LASTEXITCODE -ne 0) {
+            throw "vswhere.exe failed to locate the MSVC tools"
+          }
+          $dumpbin = $dumpbinCandidates | Select-Object -First 1
+          if (-not $dumpbin) {
+            throw "dumpbin.exe not found"
+          }
+          $dependencies = & $dumpbin /dependents $exe | Out-String
+          if ($LASTEXITCODE -ne 0 -or $dependencies -notmatch 'KERNEL32\.dll') {
+            throw "dumpbin.exe could not inspect modman dependencies: $dependencies"
+          }
+          if ($dependencies -match 'VCRUNTIME[0-9_]*\.dll') {
+            throw "modman still depends on the Visual C++ Redistributable: $dependencies"
+          }
+          $version = & $exe --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "modman --version failed: $version"
+          }
+          Write-Host "modman smoke test OK: $version"
 
       - name: Upload Binary
         uses: actions/upload-artifact@v7
         with:
-          name: modman-${{ matrix.suffix }}
+          name: ${{ matrix.asset }}
           path: |
             target/${{ matrix.target }}/release/modman
             target/${{ matrix.target }}/release/modman.exe
-          if-no-files-found: ignore
-
-  test-cross:
-    name: Test (${{ matrix.os }})
-    needs: check
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os:
-          - windows-latest
-          - macos-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Run Tests
-        run: cargo test
-        env:
-          RUST_BACKTRACE: 1
+          if-no-files-found: error

@@ -8,6 +8,7 @@ on:
       - 'crates/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.cargo/**'
       - '.github/workflows/build.yml'
       - '.github/workflows/rust-build.yml'
   pull_request:
