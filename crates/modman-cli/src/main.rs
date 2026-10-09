@@ -369,12 +369,36 @@ fn main() {
                             "SicarioMerge_P.pak",
                             true,
                         ) {
-                            Ok((ok, total)) => println!(
-                                "\nWrote {} ({} asset target(s), {} file(s) total)",
-                                out_dir.join("SicarioMerge_P.pak").display(),
-                                ok,
-                                total
-                            ),
+                            Ok((ok, total, field_conflicts)) => {
+                                println!(
+                                    "\nWrote {} ({} asset target(s), {} file(s) total)",
+                                    out_dir.join("SicarioMerge_P.pak").display(),
+                                    ok,
+                                    total
+                                );
+                                let order: Vec<String> = all_mods
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, m)| {
+                                        format!(
+                                            "{}  [{}]",
+                                            m.label(),
+                                            if m.sicario.overwrites {
+                                                "overwrite".to_string()
+                                            } else {
+                                                format!("priority {}", i + 1)
+                                            }
+                                        )
+                                    })
+                                    .collect();
+                                print_merge_report(
+                                    "Merge report",
+                                    &order,
+                                    &format!("Merged {ok} asset target(s), {total} file(s) total"),
+                                    &field_conflicts,
+                                    &[],
+                                );
+                            }
                             Err(e) => {
                                 eprintln!("{e}");
                                 std::process::exit(1);
@@ -920,6 +944,7 @@ fn cmd_combine(
     struct Override {
         ua: Vec<u8>,
         ue: Vec<u8>,
+        label: String,
     }
     let mut dt_overrides: std::collections::BTreeMap<String, Vec<Override>> =
         std::collections::BTreeMap::new();
@@ -974,10 +999,14 @@ fn cmd_combine(
                     if ua == vua && ue == vue {
                         continue; // not actually an override
                     }
-                    dt_overrides
-                        .entry(n.clone())
-                        .or_default()
-                        .push(Override { ua, ue });
+                    dt_overrides.entry(n.clone()).or_default().push(Override {
+                        ua,
+                        ue,
+                        label: pak_path
+                            .file_name()
+                            .map(|f| f.to_string_lossy().to_string())
+                            .unwrap_or_else(|| pak_path.display().to_string()),
+                    });
                     continue;
                 }
             }
@@ -995,6 +1024,7 @@ fn cmd_combine(
 
     let mut files: modman_core::merge::FileMap = modman_core::merge::FileMap::new();
     let mut merged = 0usize;
+    let mut field_conflicts: Vec<String> = Vec::new();
     for (target, ovs) in &dt_overrides {
         let Some(vkey) = base_find(target) else {
             continue;
@@ -1009,11 +1039,14 @@ fn cmd_combine(
             .iter()
             .map(|o| (o.ua.as_slice(), o.ue.as_slice()))
             .collect();
-        match modman_core::combine::merge_datatable_overrides((&vua, &vue), &refs) {
+        let labels: Vec<String> = ovs.iter().map(|o| o.label.clone()).collect();
+        match modman_core::combine::merge_datatable_overrides((&vua, &vue), &refs, &labels) {
             Ok(Some(c)) => {
                 for w in &c.warnings {
                     eprintln!("  Warning [{target}]: {w}");
                 }
+                let short = target.split('/').next_back().unwrap_or(target).to_string();
+                field_conflicts.extend(c.conflicts.iter().map(|x| format!("{short}: {x}")));
                 println!(
                     "  Merged {} override(s) into {}",
                     ovs.len(),
@@ -1060,11 +1093,37 @@ fn cmd_combine(
     )
     .map_err(|e| format!("Pack error: {e}"))?;
     println!(
-        "\nWrote {} ({} datatable(s) merged, {} file(s) total, {} pass-through conflict warning(s))",
+        "\nWrote {} ({} datatable(s) merged, {} file(s) total)",
         pak_out.display(),
         merged,
-        files.len(),
-        conflicts.len()
+        files.len()
+    );
+    let order: Vec<String> = paks
+        .iter()
+        .map(|p| {
+            p.file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_else(|| p.display().to_string())
+        })
+        .collect();
+    let other_warnings: Vec<String> = conflicts
+        .iter()
+        .map(|c| {
+            format!(
+                "'{c}' is overridden by multiple mods — only the last version is kept \
+                 (this file type cannot be combined)"
+            )
+        })
+        .collect();
+    print_merge_report(
+        "Combine report",
+        &order,
+        &format!(
+            "Merged {merged} datatable(s), {} file(s) total",
+            files.len()
+        ),
+        &field_conflicts,
+        &other_warnings,
     );
     Ok(())
 }
@@ -1080,7 +1139,7 @@ fn build_pak_from_mods(
     out_dir: &std::path::Path,
     pak_name: &str,
     verbose: bool,
-) -> Result<(usize, usize), String> {
+) -> Result<(usize, usize, Vec<String>), String> {
     let staging = out_dir.join("staging");
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
@@ -1151,6 +1210,7 @@ fn build_pak_from_mods(
 
     // Phase 2: DataTable asset patches for all mods.
     let mut ok = 0usize;
+    let mut field_conflicts: Vec<String> = Vec::new();
     for target in &asset_targets {
         if verbose {
             println!("Merging: {target}");
@@ -1182,6 +1242,8 @@ fn build_pak_from_mods(
                 merged.uasset.len()
             );
         }
+        let short = target.split('/').next_back().unwrap_or(target).to_string();
+        field_conflicts.extend(merged.conflicts.iter().map(|c| format!("{short}: {c}")));
         files.insert(uasset_key, merged.uasset);
         files.insert(uexp_key, merged.uexp);
         ok += 1;
@@ -1212,7 +1274,37 @@ fn build_pak_from_mods(
         None,
     )
     .map_err(|e| format!("Pack error: {e}"))?;
-    Ok((ok, files.len()))
+    Ok((ok, files.len(), field_conflicts))
+}
+
+/// Print the consolidated end-of-merge report: order, conflicts, warnings.
+fn print_merge_report(
+    title: &str,
+    order: &[String],
+    summary: &str,
+    field_conflicts: &[String],
+    other_warnings: &[String],
+) {
+    println!("\n=== {title} ===");
+    println!("Order (later entries win on conflicts):");
+    for (i, l) in order.iter().enumerate() {
+        println!("  {}. {l}", i + 1);
+    }
+    println!("{summary}");
+    if field_conflicts.is_empty() {
+        println!("Conflicts: none detected");
+    } else {
+        println!("Conflicts (later mod won):");
+        for c in field_conflicts {
+            println!("  - {c}");
+        }
+    }
+    if !other_warnings.is_empty() {
+        println!("Warnings:");
+        for w in other_warnings {
+            println!("  - {w}");
+        }
+    }
 }
 
 /// Write the merge report (C# `JsonReportWriter` shape).

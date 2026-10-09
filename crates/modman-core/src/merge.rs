@@ -18,6 +18,8 @@ use std::collections::BTreeMap;
 pub struct MergedOutput {
     pub uasset: Vec<u8>,
     pub uexp: Vec<u8>,
+    /// Field-level conflicts between mods (later mods win).
+    pub conflicts: Vec<String>,
 }
 
 /// A virtual build filesystem: target path (game-root relative, forward
@@ -83,7 +85,66 @@ pub fn merge_mods(
 ) -> Result<MergedOutput, ApplyError> {
     let mut uasset = vanilla_uasset.to_vec();
     let mut uexp = vanilla_uexp.to_vec();
-    for modm in mods {
+    // Track property edits per (row, prop) for conflict reporting: a later
+    // mod overwriting an earlier mod's edit is a conflict worth surfacing.
+    let mut tracked: std::collections::BTreeMap<(String, String), (usize, String)> =
+        std::collections::BTreeMap::new();
+    let mut conflicts: Vec<String> = Vec::new();
+    for (mi, modm) in mods.iter().enumerate() {
+        // Record this mod's property edits (row from the template's first
+        // literal row fragment; wildcard rows group under '*').
+        if let Some(sets) = modm.asset_patches.get(target) {
+            for set in sets {
+                for patch in &set.patches {
+                    if !matches!(
+                        patch.patch_type.as_str(),
+                        "propertyValue"
+                            | "modifyPropertyValue"
+                            | "arrayPropertyValue"
+                            | "textProperty"
+                    ) {
+                        continue;
+                    }
+                    let row = crate::fragment::parse_template(&patch.template)
+                        .ok()
+                        .and_then(|ctx| {
+                            ctx.fragments.iter().find_map(|f| match f {
+                                crate::fragment::Fragment::StructName { name, .. } => {
+                                    Some(name.clone())
+                                }
+                                _ => None,
+                            })
+                        })
+                        .unwrap_or_else(|| "*".to_string());
+                    let prop = crate::fragment::parse_template(&patch.template)
+                        .ok()
+                        .and_then(|ctx| {
+                            ctx.fragments.iter().rev().find_map(|f| match f {
+                                crate::fragment::Fragment::StructProperty { name, .. } => {
+                                    Some(name.clone())
+                                }
+                                _ => None,
+                            })
+                        })
+                        .unwrap_or_else(|| patch.description.clone());
+                    let key = (row, prop);
+                    if let Some((prev_m, prev_v)) = tracked.get(&key) {
+                        if *prev_m != mi && *prev_v != patch.value {
+                            conflicts.push(format!(
+                                "{}.{}: '{}' sets '{}', '{}' sets '{}' (later wins)",
+                                key.0,
+                                key.1,
+                                mods[*prev_m].label(),
+                                prev_v,
+                                modm.label(),
+                                patch.value
+                            ));
+                        }
+                    }
+                    tracked.insert(key, (mi, patch.value.clone()));
+                }
+            }
+        }
         let mut dt =
             DataTable::walk_bytes(&uasset, &uexp).map_err(|e| ApplyError::Asset(e.to_string()))?;
         // objectRef patches (array-append form) apply first: they append
@@ -121,7 +182,11 @@ pub fn merge_mods(
             }
         }
     }
-    Ok(MergedOutput { uasset, uexp })
+    Ok(MergedOutput {
+        uasset,
+        uexp,
+        conflicts,
+    })
 }
 
 #[cfg(test)]

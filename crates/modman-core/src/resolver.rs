@@ -371,7 +371,7 @@ fn byte_matches_query(dt: &DataTable, bv: &ByteValue, query: &str) -> bool {
 }
 
 /// Raw value string per UAssetAPI `ToString()` overrides.
-fn prop_value_string(v: &PropValue) -> Option<String> {
+pub(crate) fn prop_value_string(v: &PropValue) -> Option<String> {
     Some(match v {
         PropValue::Int(i) => i.to_string(),
         PropValue::Float(f) => format_f32(*f),
