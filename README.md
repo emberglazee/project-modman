@@ -4,7 +4,17 @@
 
 ## Status
 
-**Pre-1.0, in development.** Working today: PAK I/O (`info`, `list`, `unpack`, `pack`), `.dtm`/`.dtp` patch parsing, Fragment DSL parsing, patch-type parsing, template substitution, and a **verified DataTable engine** (`modman-uasset::walk` + `edit` — byte-exact walker with byte ranges, plus same-size splice editing; fixture-gated against real PW assets). In progress: patch application + merge (the Sicario-parity A-layer). **Not yet usable for real mods** — `build` deliberately writes no output until patch application lands.
+**v1 (Sicario-merger parity) is essentially complete and byte-verified against the C# merger.** Working today:
+
+- PAK I/O (`info`, `list`, `unpack`, `pack`, `scan`)
+- `.dtm`/`.dtp` patch parsing, Fragment DSL, every Sicario patch type
+- Template rendering (Fluid-compatible: `vars`/`inputs` + the full Sicario filter set)
+- **Verified DataTable engine** (byte-exact walker + same-size splice + length-changing rowops)
+- **HexPatch engine** (`filePatches`) with the C# stream-walk semantics and the `.uexp` length auto-correct
+- **Merge pipeline**: component model (embeddedPresets → loosePresets → sicarioRequests), engine-major phases, `.uexp`/`.uasset` sidecar handling
+- **`build`** writes a real merged `SicarioMerge_P.pak`; **`preset-pack`** builds standalone preset packs with the preset embedded at `Content/sicario/`; **`--report`** writes the C#-identical merge report
+
+In-game acceptance passed (SPEAR Unlock + Improved Chimera verified in Project Wingman 2.1.1A).
 
 ## V1 Scope — 1:1 parity with the Project Sicario merger
 
@@ -14,11 +24,27 @@ A drop-in replacement for the Sicario merger (`SicarioPatch.Loader`) against Pro
 
 - **Inputs:** identical `.dtm`/`.dtp` WingmanMod JSON, with `_vars`/`_inputs` templating.
 - **Patch semantics:** every Sicario fragment type, every Sicario patch type, identical matching and value behavior.
-- **Merge semantics:** identical multi-mod merging (conflicts/dedup) to Sicario's engine.
-- **Output:** a Pak V11 mod pack (mount `../../../`) for the game's `~mods/` directory.
+- **Merge semantics:** identical multi-mod merging to Sicario's engine.
+- **Output:** a Pak V3 mod pack (mount `../../../`) for the game's `~mods/` directory — same as the merger.
 - **Zero .NET dependency** — single native binary.
 
-Nothing more (no new formats, no new behaviors, no UI), nothing less.
+## Parity status
+
+Verified against the C# merger at byte level (oracle harness in `~/modding/project-wingman/sicario-oracle`):
+
+| Surface | Status |
+|---|---|
+| DataTable patches (propertyValue, modify, array, text, duplicate*, delete) | ✅ byte-exact (uassets identical; uexps modulo random FText keys) |
+| `filePatches` hex engine (all types, windows, filters, length fix-up) | ✅ byte-exact, including the destructive absent-`value` path |
+| Multi-mod merge order + conflict semantics | ✅ oracle-verified |
+| Components, parameters/inputs, engine-version gate, `GetLabel` | ✅ |
+| Merge report (`--report`) | ✅ byte-identical |
+| `preset-pack` | ✅ byte-identical output pak |
+| In-game acceptance | ✅ (user-verified) |
+
+### Known gap
+
+- **`customSkins` (legacy PSM skin-slot merging) and `objectRef` application.** The loader synthesizes an `objectRef` mod from installed `*_P.pak` skins (see `SkinSlotLoader`): it appends object references to `SkinLibraryLegacy` arrays and adds new **import entries** (FObjectImport) plus name-table additions to `DB_Aircraft.uasset`. Our `objectRef` patch type parses but is not yet applied; implementing it requires UE4 import-table writing (the same machinery a fuller UAssetAPI writer port would provide). Modern PNG-pipeline skins (2.x) do not need this merge.
 
 ## Building
 
@@ -40,13 +66,19 @@ cargo test
 ```bash
 modman --help
 modman --version
+
+# Merge mods/presets into a mod pak (like `ProjectSicario build`)
+modman build <paths...> --install-path <game> --output <dir> --report merge-report.json
+
+# Build standalone preset packs (preset embedded at Content/sicario/)
+modman preset-pack <preset.dtp...> -n MyPack --install-path <game>
 ```
 
 ## Project Structure
 
 ```
 crates/
-├── modman-core/       Data models, patch engine, mod merging
+├── modman-core/       Data models, patch engine, merge pipeline, components
 ├── modman-uasset/     UE4 .uasset binary parser (standalone)
 ├── modman-pak/        PAK file operations (wraps repak)
 └── modman-cli/        CLI binary
