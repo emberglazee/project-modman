@@ -12,7 +12,7 @@ members = [
 repository = "https://github.com/emberglazee/project-modman"
 authors = ["emberglazee"]
 license = "MIT"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 
 [workspace.dependencies]

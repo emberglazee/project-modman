@@ -351,7 +351,7 @@ dependencies = [
 
 [[package]]
 name = "modman"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "modman-core",
@@ -363,7 +363,7 @@ dependencies = [
 
 [[package]]
 name = "modman-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "modman-pak",
  "modman-uasset",
@@ -374,7 +374,7 @@ dependencies = [
 
 [[package]]
 name = "modman-pak"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "repak",
  "thiserror",
@@ -382,7 +382,7 @@ dependencies = [
 
 [[package]]
 name = "modman-uasset"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -391,7 +391,7 @@ dependencies = [
 
 [[package]]
 name = "modman-wasm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "js-sys",
  "modman-core",
