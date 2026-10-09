@@ -265,20 +265,18 @@ fn main() {
                         let _ = std::fs::remove_dir_all(&staging);
                         std::fs::create_dir_all(&staging).unwrap();
 
-                        for m in &all_mods {
-                            if !m.file_patches.is_empty() {
-                                eprintln!(
-                                    "  Warning: {} has filePatches (not yet supported); skipped",
-                                    m.label()
-                                );
-                            }
-                        }
-
-                        // Targets = union of every mod's asset patch targets.
+                        // Targets = union of every mod's asset + hex patch targets.
                         let mut targets: std::collections::BTreeSet<String> =
                             std::collections::BTreeSet::new();
                         for m in &all_mods {
                             targets.extend(m.asset_patches.keys().cloned());
+                            targets.extend(m.file_patches.keys().cloned());
+                        }
+                        // Asset targets drive the DataTable merge phase.
+                        let mut asset_targets: std::collections::BTreeSet<String> =
+                            std::collections::BTreeSet::new();
+                        for m in &all_mods {
+                            asset_targets.extend(m.asset_patches.keys().cloned());
                         }
 
                         let main_pak_path = game_paks.join("pakchunk0-WindowsNoEditor.pak");
@@ -296,8 +294,60 @@ fn main() {
 
                         let mod_refs: Vec<&modman_core::manifest::WingmanMod> =
                             all_mods.iter().collect();
-                        let mut ok = 0usize;
+
+                        // Load every target (plus .uexp/.uasset sidecars) into a
+                        // virtual file map, like the C# build context.
+                        let mut files: modman_core::merge::FileMap =
+                            modman_core::merge::FileMap::new();
+                        let find_entry = |name: &str| -> Option<String> {
+                            all_files
+                                .iter()
+                                .find(|f| f.as_str() == name)
+                                .or_else(|| all_files.iter().find(|f| f.ends_with(name)))
+                                .cloned()
+                        };
                         for target in &targets {
+                            let needle = target.trim_start_matches("../../../").replace('\\', "/");
+                            let mut wanted = vec![needle.clone()];
+                            if needle.ends_with(".uexp") {
+                                wanted.push(needle.replace(".uexp", ".uasset"));
+                            } else if needle.ends_with(".uasset") {
+                                wanted.push(needle.replace(".uasset", ".uexp"));
+                            }
+                            for w in wanted {
+                                let Some(entry) = find_entry(&w) else {
+                                    continue;
+                                };
+                                if files.contains_key(&entry) {
+                                    continue;
+                                }
+                                let stem = std::path::Path::new(&entry)
+                                    .file_stem()
+                                    .map(|s| s.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| "asset".to_string());
+                                let ext = std::path::Path::new(&entry)
+                                    .extension()
+                                    .map(|s| s.to_string_lossy().to_string())
+                                    .unwrap_or_default();
+                                let local = extract_dir.join(format!("{stem}.{ext}"));
+                                if let Err(e) = pak.extract_entry(&entry, &local) {
+                                    eprintln!("  Extract error ({}): {}", entry, e);
+                                    continue;
+                                }
+                                files.insert(entry, std::fs::read(&local).unwrap());
+                            }
+                        }
+
+                        // Phase 1 (engine-major): hex patches for all mods,
+                        // including the .uexp length auto-correct.
+                        if let Err(e) = modman_core::merge::apply_hex_phase(&mut files, &mod_refs) {
+                            eprintln!("Hex patch error: {e}");
+                            std::process::exit(1);
+                        }
+
+                        // Phase 2: DataTable asset patches for all mods.
+                        let mut ok = 0usize;
+                        for target in &asset_targets {
                             println!("Merging: {target}");
                             let needle = target.trim_start_matches("../../../").replace('\\', "/");
                             let uexp_needle = if needle.ends_with(".uexp") {
@@ -308,35 +358,15 @@ fn main() {
                                 format!("{needle}.uexp")
                             };
                             let uasset_needle = uexp_needle.replace(".uexp", ".uasset");
-                            let find_entry = |name: &str| -> Option<String> {
-                                all_files
-                                    .iter()
-                                    .find(|f| f.as_str() == name)
-                                    .or_else(|| all_files.iter().find(|f| f.ends_with(name)))
-                                    .cloned()
-                            };
-                            let (Some(uasset_entry), Some(uexp_entry)) =
-                                (find_entry(&uasset_needle), find_entry(&uexp_needle))
-                            else {
+                            let (Some(uexp_key), Some(uasset_key)) = (
+                                modman_core::merge::resolve_target(&files, &uexp_needle).cloned(),
+                                modman_core::merge::resolve_target(&files, &uasset_needle).cloned(),
+                            ) else {
                                 eprintln!("  Warning: no pak entries for '{target}'; skipped");
                                 continue;
                             };
-                            let stem = std::path::Path::new(&uexp_entry)
-                                .file_stem()
-                                .map(|s| s.to_string_lossy().to_string())
-                                .unwrap_or_else(|| "asset".to_string());
-                            let local_uasset = extract_dir.join(format!("{stem}.uasset"));
-                            let local_uexp = extract_dir.join(format!("{stem}.uexp"));
-                            if let Err(e) = pak.extract_entry(&uasset_entry, &local_uasset) {
-                                eprintln!("  Extract error ({}): {}", uasset_entry, e);
-                                continue;
-                            }
-                            if let Err(e) = pak.extract_entry(&uexp_entry, &local_uexp) {
-                                eprintln!("  Extract error ({}): {}", uexp_entry, e);
-                                continue;
-                            }
-                            let uasset = std::fs::read(&local_uasset).unwrap();
-                            let uexp = std::fs::read(&local_uexp).unwrap();
+                            let uasset = files.get(&uasset_key).unwrap().clone();
+                            let uexp = files.get(&uexp_key).unwrap().clone();
                             let merged = match modman_core::merge::merge_mods(
                                 &uasset, &uexp, &mod_refs, target,
                             ) {
@@ -346,22 +376,25 @@ fn main() {
                                     std::process::exit(1);
                                 }
                             };
-                            let out_uexp = staging.join(&needle);
-                            let out_uasset =
-                                staging.join(uasset_needle.replace(".uexp", ".uasset"));
-                            if let Some(parent) = out_uexp.parent() {
-                                std::fs::create_dir_all(parent).unwrap();
-                            }
-                            std::fs::write(&out_uexp, &merged.uexp).unwrap();
-                            std::fs::write(&out_uasset, &merged.uasset).unwrap();
                             println!(
                                 "  -> {} bytes uexp, {} bytes uasset",
                                 merged.uexp.len(),
                                 merged.uasset.len()
                             );
+                            files.insert(uasset_key, merged.uasset);
+                            files.insert(uexp_key, merged.uexp);
                             ok += 1;
                         }
-                        if ok == 0 {
+
+                        // Write every file in the map into the staging dir.
+                        for (key, bytes) in &files {
+                            let out_path = staging.join(key);
+                            if let Some(parent) = out_path.parent() {
+                                std::fs::create_dir_all(parent).unwrap();
+                            }
+                            std::fs::write(&out_path, bytes).unwrap();
+                        }
+                        if files.is_empty() {
                             eprintln!("No targets merged.");
                             std::process::exit(1);
                         }
@@ -374,9 +407,10 @@ fn main() {
                             None,
                         ) {
                             Ok(()) => println!(
-                                "\nWrote {} ({} target file(s) merged)",
+                                "\nWrote {} ({} asset target(s), {} file(s) total)",
                                 pak_out.display(),
-                                ok
+                                ok,
+                                files.len()
                             ),
                             Err(e) => {
                                 eprintln!("Pack error: {}", e);

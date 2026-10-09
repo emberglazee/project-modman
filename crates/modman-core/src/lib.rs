@@ -10,12 +10,14 @@ pub mod apply;
 pub mod discovery;
 pub mod engine;
 pub mod fragment;
+pub mod hexpatch;
 pub mod manifest;
 pub mod merge;
 pub mod patch;
 pub mod resolver;
 pub mod rowops;
 pub mod template;
+pub mod templating;
 
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")

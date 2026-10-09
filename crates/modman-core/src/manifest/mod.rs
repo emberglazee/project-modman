@@ -164,23 +164,40 @@ pub struct FilePatchSet {
     pub patches: Vec<FilePatch>,
 }
 
-/// A single hex patch (HexPatch format): find `template` bytes, substitute `substitution`.
+/// A single hex patch (HexPatch format).
+///
+/// NOTE: the local C# merger binds the substitution from the JSON field
+/// `value` (ModEngine.Core `Patch.Value`); doc/hosted-style `"substitution"`
+/// fields are silently ignored, which turns the replacement into an empty
+/// write. This model mirrors that contract exactly.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FilePatch {
     #[serde(default, deserialize_with = "de_null_default")]
     pub description: String,
     /// Hex string to search for (e.g. `"00 48 02"`).
-    #[serde(default, deserialize_with = "de_null_default")]
-    pub template: String,
-    /// Hex string to substitute (e.g. `"01"`).
-    #[serde(default, deserialize_with = "de_null_default")]
-    pub substitution: String,
-    /// Patch mode: `before`, `inPlace`, `valueBefore` (default per HexPatch).
+    #[serde(default)]
+    pub template: Option<String>,
+    /// Hex string to substitute (e.g. `"01"`). Bound from the `value` field.
+    #[serde(default)]
+    pub value: Option<String>,
+    /// Patch mode: `before`, `inPlace`, `valueBefore`; anything else (e.g.
+    /// `none`) is ignored by the engine.
     #[serde(default, rename = "type")]
     pub patch_type: Option<String>,
-    /// Optional text window anchors for scoped matching.
+    /// Optional window anchors for scoped matching.
     #[serde(default)]
-    pub window: Option<Value>,
+    pub window: Option<HexWindow>,
+}
+
+/// HexPatch match window anchors.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HexWindow {
+    #[serde(default)]
+    pub after: Option<String>,
+    #[serde(default)]
+    pub before: Option<String>,
+    #[serde(default, rename = "maxMatches", alias = "maxmatches")]
+    pub max_matches: Option<i64>,
 }
 
 /// A preset file (`.dtp`): parameters + one or more mods.
@@ -445,7 +462,9 @@ mod tests {
         let m = parse_mod_json(json).unwrap();
         assert_eq!(m.meta.as_ref().unwrap().display_name, "AoA for All");
         let sets = m.file_patches.values().next().unwrap();
-        assert_eq!(sets[0].patches[0].substitution, "01");
+        // `substitution` does not bind — the C# reads `value` only.
+        assert_eq!(sets[0].patches[0].value, None);
+        assert_eq!(sets[0].patches[0].template.as_deref(), Some("00 48 02"));
         assert_eq!(sets[0].patches[0].patch_type.as_deref(), Some("before"));
         assert!(m.is_valid());
     }

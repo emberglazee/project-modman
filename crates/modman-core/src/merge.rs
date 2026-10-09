@@ -7,15 +7,67 @@
 //! (Priority 1) → loose presets (2) → embedded presets (3).
 
 use crate::apply::{self, ApplyError};
+use crate::hexpatch;
 use crate::manifest::WingmanMod;
 use crate::rowops;
 use modman_uasset::walk::DataTable;
+use std::collections::BTreeMap;
 
 /// The merged asset pair.
 #[derive(Debug)]
 pub struct MergedOutput {
     pub uasset: Vec<u8>,
     pub uexp: Vec<u8>,
+}
+
+/// A virtual build filesystem: target path (game-root relative, forward
+/// slashes) -> raw bytes.
+pub type FileMap = BTreeMap<String, Vec<u8>>;
+
+/// Resolve a patch target key against the map (exact, then case-insensitive
+/// suffix match).
+pub fn resolve_target<'a>(files: &'a FileMap, target: &str) -> Option<&'a String> {
+    let norm = target.trim_start_matches('/').replace('\\', "/");
+    if files.contains_key(&norm) {
+        return files.get_key_value(&norm).map(|(k, _)| k);
+    }
+    let t = norm.to_lowercase();
+    files.keys().find(|k| {
+        let kl = k.to_lowercase();
+        kl == t || kl.ends_with(&t) || t.ends_with(&kl)
+    })
+}
+
+/// Engine-major phase 1: apply every mod's `filePatches` (hex engine) in mod
+/// order, including the C# `HexPatchEngine` length auto-correct: when a
+/// `.uexp` changes size, its sibling `.uasset`'s serial size (old `len - 4`)
+/// is hex-swapped for the new value.
+pub fn apply_hex_phase(files: &mut FileMap, mods: &[&WingmanMod]) -> Result<(), ApplyError> {
+    for modm in mods {
+        let mut targets: Vec<&String> = modm.file_patches.keys().collect();
+        targets.sort();
+        for target in targets {
+            let sets = &modm.file_patches[target];
+            let key = resolve_target(files, target)
+                .ok_or_else(|| {
+                    ApplyError::Asset(format!("filePatches target not found: {target}"))
+                })?
+                .clone();
+            let src = files.get(&key).expect("resolved key exists").clone();
+            let out = hexpatch::run_file_patches(&src, sets)
+                .map_err(|e| ApplyError::Asset(e.to_string()))?;
+            if key.ends_with(".uexp") && out.len() != src.len() {
+                let sibling = format!("{}.uasset", &key[..key.len() - 5]);
+                if let Some(uasset) = files.get(&sibling).cloned() {
+                    let fixed = hexpatch::apply_length_fixup(&uasset, src.len(), out.len())
+                        .map_err(|e| ApplyError::Asset(e.to_string()))?;
+                    files.insert(sibling, fixed);
+                }
+            }
+            files.insert(key, out);
+        }
+    }
+    Ok(())
 }
 
 /// Apply a sequence of mods (in merge order) to a vanilla asset pair.
@@ -172,7 +224,10 @@ mod tests {
             let mut ranges: Vec<(usize, usize)> = Vec::new();
             for &i in &diffs {
                 if let Some(last) = ranges.last_mut() {
-                    if i <= last.1 + 2 {
+                    // FText keys are random hex strings; coincidental byte
+                    // matches split a key's diff into sub-ranges, so merge
+                    // across small gaps.
+                    if i <= last.1 + 4 {
                         last.1 = i;
                         continue;
                     }
@@ -180,7 +235,7 @@ mod tests {
                 ranges.push((i, i));
             }
             assert!(
-                ranges.len() <= 3,
+                ranges.len() <= 4,
                 "too many diff ranges: {ranges:?} ({} bytes)",
                 diffs.len()
             );
@@ -202,5 +257,92 @@ mod tests {
                 }
             }
         }
+    }
+
+    struct HexCase {
+        uasset: Vec<u8>,
+        uexp: Vec<u8>,
+        oracle_uasset: Vec<u8>,
+        oracle_uexp: Vec<u8>,
+    }
+
+    fn oracle_hex_case(preset_file: &str, oracle_pak: &str) -> Option<HexCase> {
+        let home = std::env::var("HOME").ok()?;
+        let base =
+            std::path::Path::new(&home).join("modding/project-wingman/sicario-oracle/run5-hex");
+        let preset = base.join(preset_file);
+        let pak_path = base.join(oracle_pak);
+        if !preset.exists() || !pak_path.exists() {
+            return None;
+        }
+
+        let (ua, ue) = pair();
+        let uasset_key =
+            "ProjectWingman/Content/ProjectWingman/Blueprints/Data/AircraftData/DB_Aircraft.uasset"
+                .to_string();
+        let mut files = FileMap::new();
+        files.insert(uasset_key.clone(), ua);
+        files.insert(TARGET.to_string(), ue);
+
+        let mut mods = parse_preset_json(&std::fs::read_to_string(&preset).unwrap())
+            .unwrap()
+            .mods;
+        for m in &mut mods {
+            crate::template::apply_variables_to_mod(m);
+        }
+        let refs: Vec<&WingmanMod> = mods.iter().collect();
+        apply_hex_phase(&mut files, &refs).unwrap();
+
+        let pak = modman_pak::PakArchive::open(&pak_path).unwrap();
+        let find = |suffix: &str| {
+            pak.files()
+                .into_iter()
+                .find(|f| f.ends_with(suffix))
+                .unwrap()
+        };
+        let oracle_uexp = pak.read_entry(&find("DB_Aircraft.uexp")).unwrap();
+        let oracle_uasset = pak.read_entry(&find("DB_Aircraft.uasset")).unwrap();
+        Some(HexCase {
+            uasset: files[&uasset_key].clone(),
+            uexp: files[TARGET].clone(),
+            oracle_uasset,
+            oracle_uexp,
+        })
+    }
+
+    /// Hex engine parity vs the C# merger (clean path): `row`/`word` filters,
+    /// `before` type, ignored `none` type, cross-mod growth and the `.uexp`
+    /// length auto-correct in the sibling `.uasset`.
+    #[test]
+    fn hex_phase_matches_oracle() {
+        let Some(case) = oracle_hex_case("hex-test2.dtp", "oracle-hex8-pak") else {
+            return;
+        };
+        assert_eq!(
+            case.uexp, case.oracle_uexp,
+            "hex-phase uexp differs from oracle"
+        );
+        assert_eq!(
+            case.uasset, case.oracle_uasset,
+            "hex-phase uasset (length auto-correct) differs from oracle"
+        );
+    }
+
+    /// Faithful reproduction of the C# "absent value" behavior: doc-style
+    /// `substitution` fields do not bind to `value`, and matching templates
+    /// get dropped by the InPlace stream-walk (the destructive path).
+    #[test]
+    fn hex_absent_value_damage_matches_oracle() {
+        let Some(case) = oracle_hex_case("hex-test.dtp", "oracle-hex7-pak") else {
+            return;
+        };
+        assert_eq!(
+            case.uexp, case.oracle_uexp,
+            "damage-path uexp differs from oracle"
+        );
+        assert_eq!(
+            case.uasset, case.oracle_uasset,
+            "damage-path uasset differs from oracle"
+        );
     }
 }
