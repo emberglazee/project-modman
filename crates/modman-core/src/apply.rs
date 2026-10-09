@@ -41,8 +41,11 @@ pub fn plan_same_size_edits(
     modm: &WingmanMod,
     target: &str,
 ) -> Result<Vec<PlannedEdit>, ApplyError> {
+    // The C# applies Liquid templating at load time; mirror that here.
+    let mut substituted = modm.clone();
+    crate::template::apply_variables_to_mod(&mut substituted);
     let mut out = Vec::new();
-    let Some(sets) = modm.asset_patches.get(target) else {
+    let Some(sets) = substituted.asset_patches.get(target) else {
         return Ok(out);
     };
     for set in sets {
@@ -104,7 +107,21 @@ fn encode_value(
             node.describe()
         )));
     }
-    let bytes = match value_type {
+    let bytes = encode_scalar(value_type, value)?;
+    let span_len = span.1 - span.0;
+    if bytes.len() != span_len {
+        return Err(ApplyError::Unsupported(format!(
+            "length-changing edit on {}: span is {span_len} bytes, replacement is {} bytes",
+            node.describe(),
+            bytes.len()
+        )));
+    }
+    Ok(bytes)
+}
+
+/// Encode a scalar patch value into its raw bytes (no size checks).
+pub(crate) fn encode_scalar(value_type: &str, value: &str) -> Result<Vec<u8>, ApplyError> {
+    Ok(match value_type {
         "BoolProperty" => match value.to_ascii_lowercase().as_str() {
             "true" => vec![1u8],
             "false" => vec![0u8],
@@ -133,16 +150,7 @@ fn encode_value(
                 "value type '{other}' (same-size encoder)"
             )))
         }
-    };
-    let span_len = span.1 - span.0;
-    if bytes.len() != span_len {
-        return Err(ApplyError::Unsupported(format!(
-            "length-changing edit on {}: span is {span_len} bytes, replacement is {} bytes",
-            node.describe(),
-            bytes.len()
-        )));
-    }
-    Ok(bytes)
+    })
 }
 
 /// Apply planned edits to a copy of the uexp payload.

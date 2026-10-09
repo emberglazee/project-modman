@@ -27,6 +27,8 @@ pub struct DataTable {
     pub top_props: Vec<Prop>,
     /// Unconsumed payload bytes at the end of the export (must be 0 for a clean walk).
     pub leftover: usize,
+    /// Offset of the DataTable's `numEntries` int32 in the payload.
+    pub num_entries_offset: usize,
     /// Size-field inconsistencies found while walking (must be empty for a clean walk).
     pub size_mismatches: Vec<String>,
     /// Per-kind counters (`props_total`, `prop:FloatProperty`, `customstruct:Vector`, ...).
@@ -214,13 +216,14 @@ impl DataTable {
         }
 
         let payload = &uexp[..size];
-        let (top_props, rows, leftover, size_mismatches, counters) = {
+        let (top_props, rows, leftover, size_mismatches, counters, num_entries_offset) = {
             let mut w = Walker::new(payload, &names);
             let top_props = w.prop_list("export")?;
             let object_guid_present = w.i32()?;
             if object_guid_present == 1 {
                 w.skip(16)?;
             }
+            let num_entries_offset = w.pos;
             let num_rows = w.i32()?;
             let mut rows = Vec::new();
             for i in 0..num_rows {
@@ -236,7 +239,14 @@ impl DataTable {
                 });
             }
             let leftover = payload.len().saturating_sub(w.pos);
-            (top_props, rows, leftover, w.mismatches, w.counters)
+            (
+                top_props,
+                rows,
+                leftover,
+                w.mismatches,
+                w.counters,
+                num_entries_offset,
+            )
         };
 
         Ok(DataTable {
@@ -245,6 +255,7 @@ impl DataTable {
             rows,
             top_props,
             leftover,
+            num_entries_offset,
             size_mismatches,
             counters,
         })

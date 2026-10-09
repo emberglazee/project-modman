@@ -33,7 +33,11 @@ pub fn substitute(input: &str, vars: &HashMap<String, String>) -> String {
                 i += 2;
             }
 
-            match vars.get(&var_name) {
+            // Liquid-style namespaced names: `vars.x` reads the variables map;
+            // `inputs.x` is resolved by the enableSteps logic (left untouched
+            // here, matching the C# templating behavior).
+            let lookup = var_name.strip_prefix("vars.").unwrap_or(&var_name);
+            match vars.get(lookup) {
                 Some(val) => result.push_str(val),
                 None => {
                     // Leave as-is
@@ -96,6 +100,13 @@ mod tests {
         let vars = HashMap::new();
         let result = substitute("{{ unknown }}", &vars);
         assert_eq!(result, "{{ unknown }}");
+    }
+
+    #[test]
+    fn test_namespaced_var() {
+        let vars = [("aircraftName".into(), "ACG-01X".into())].into();
+        let result = substitute("*:'{{ vars.aircraftName }}'", &vars);
+        assert_eq!(result, "*:'ACG-01X'");
     }
 
     #[test]

@@ -227,12 +227,16 @@ fn parse_array_property_value(value: &str) -> Result<PatchOp, PatchParseError> {
 }
 
 fn parse_text_property(value: &str) -> Result<PatchOp, PatchParseError> {
-    // Format: "'key':'value'" or "*:'text'"
+    // Format: `'key':'value'` or `*:'value'` (key `*` = all parts).
     let value = value.trim();
-    if let Some(colon_pos) = value.find("':'") {
-        let key = value[1..colon_pos].to_string();
-        let val = value[colon_pos + 2..].trim_end_matches('\'').to_string();
-        let key = if key == "*" { None } else { Some(key) };
+    if let Some(colon_pos) = value.find(':') {
+        let key_raw = value[..colon_pos].trim().trim_matches('\'');
+        let key = if key_raw == "*" {
+            None
+        } else {
+            Some(key_raw.to_string())
+        };
+        let val = value[colon_pos + 1..].trim().trim_matches('\'').to_string();
         Ok(PatchOp::TextProperty { key, value: val })
     } else {
         Err(PatchParseError::InvalidValue(format!(
