@@ -87,11 +87,8 @@ pub fn apply_length_changing(
             }
         }
     }
-    if dups.is_empty() {
-        return Err(ApplyError::Unsupported(
-            "no duplicateEntry (not a length-changing mod)".into(),
-        ));
-    }
+    // No duplicateEntry: pure in-place length-changing mod — the append phase
+    // is simply skipped below.
 
     // Phase 2: classify + plan edits (copy edits vs in-place edits).
     let mut in_place: Vec<PlannedEdit> = Vec::new();
@@ -168,7 +165,7 @@ pub fn apply_length_changing(
         appended.extend_from_slice(&copy);
         name_append.push(dup.target.clone());
     }
-    let uexp_delta = appended.len() as i64;
+    let uexp_delta = appended.len() as i64 + inplace_delta;
 
     // Phase 5: assemble — [0..rows_end) + appended rows + [rows_end..trailer).
     let rows_end = dt.rows.last().map(|r| r.end).unwrap_or(0);

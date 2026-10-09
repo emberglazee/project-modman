@@ -22,6 +22,8 @@ pub enum ApplyError {
     Unsupported(String),
     #[error("splice error: {0}")]
     Splice(String),
+    #[error("asset error: {0}")]
+    Asset(String),
 }
 
 /// One planned same-size edit: overwrite `span` with `bytes`.
