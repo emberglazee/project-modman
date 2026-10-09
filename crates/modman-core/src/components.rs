@@ -5,7 +5,7 @@
 //! * `embeddedPresets`  (P1) — presets embedded in paks (`Content/sicario/*.dtp`)
 //! * `loosePresets`     (P2) — `*.dtp` files found in the search paths
 //! * `sicarioRequests`  (P3) — build requests embedded in paks (`_meta/sicario/*.json`)
-//! * `customSkins`      (P0) — PSM skin slot merge (not yet implemented)
+//! * `customSkins`      (P4) — PSM skin slot merge (runs last, empirically)
 //!
 //! Mods run in ascending priority (P1 first). Parameters merge in DESCENDING
 //! priority, later-in-sequence overwriting — so embedded presets win, then
@@ -215,6 +215,12 @@ pub fn embedded_components(scan: &ScanReport, engine: &str) -> (Vec<MergeCompone
 /// (the aircraft row), and synthesizes an `objectRef` mod appending each skin
 /// texture to that row's `SkinLibraryLegacy` array.
 ///
+/// Priority note: the C# source leaves this component's priority at the
+/// default (0), but the built binary demonstrably runs it **after** every
+/// other component (verified via name-append order probes: embeddedPresets,
+/// loosePresets and sicarioRequests all append their names first). We use 4
+/// to reproduce the observed behavior.
+///
 /// Returns `None` when no skin records are found.
 pub fn skin_component(paks_dir: &Path) -> (Option<MergeComponent>, Vec<String>) {
     let mut paks: Vec<PathBuf> = Vec::new();
@@ -303,7 +309,7 @@ pub fn skin_component(paks_dir: &Path) -> (Option<MergeComponent>, Vec<String>) 
     (
         Some(MergeComponent {
             name: "customSkins",
-            priority: 0,
+            priority: 4,
             mods: vec![modm],
             params: Vars::new(),
             resources,
