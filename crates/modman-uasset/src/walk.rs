@@ -37,6 +37,10 @@ pub struct DataTable {
 #[derive(Debug)]
 pub struct Row {
     pub name: String,
+    /// Offset of the row's name (FName) in the payload.
+    pub start: usize,
+    /// End (exclusive) of the row's property list (includes the `None` terminator).
+    pub end: usize,
     pub props: Vec<Prop>,
 }
 
@@ -113,9 +117,21 @@ pub struct TextValue {
 
 #[derive(Debug, Clone)]
 pub enum ArrayElem {
-    Prim(PropValue),
+    /// Primitive item (with its byte span in the payload).
+    Prim {
+        value: PropValue,
+        start: usize,
+        end: usize,
+    },
+    /// Struct item (children carry their own spans).
     Struct(Vec<Prop>),
-    Custom { kind: String, value: CustomValue },
+    /// Fixed-layout built-in struct item (with its byte span).
+    Custom {
+        kind: String,
+        value: CustomValue,
+        start: usize,
+        end: usize,
+    },
 }
 
 /// Decoded value of a fixed-layout built-in struct.
@@ -208,10 +224,14 @@ impl DataTable {
             let num_rows = w.i32()?;
             let mut rows = Vec::new();
             for i in 0..num_rows {
+                let row_start = w.pos;
                 let rn = w.fname()?;
                 let props = w.prop_list(&format!("row[{i}]{}", rn.value))?;
+                let row_end = w.pos;
                 rows.push(Row {
                     name: rn.value,
+                    start: row_start,
+                    end: row_end,
                     props,
                 });
             }
@@ -367,6 +387,11 @@ impl<'a> Walker<'a> {
 
     fn fstring(&mut self) -> Result<String, Error> {
         let n = self.i32()?;
+        self.fstring_body(n)
+    }
+
+    /// Read an FString body for an already-read length prefix.
+    fn fstring_body(&mut self, n: i32) -> Result<String, Error> {
         if n == 0 {
             return Ok(String::new());
         }
@@ -466,9 +491,18 @@ impl<'a> Walker<'a> {
         Ok(t)
     }
 
-    /// Value-only read for array items (no tag, no GUID flag).
-    fn array_item_value(&mut self, t: &str) -> Result<PropValue, Error> {
-        Ok(match t {
+    /// Value-only read for array items (no tag, no GUID flag). Returns the
+    /// value and the span a same-size splice may overwrite (for strings this
+    /// excludes the length prefix).
+    fn array_item(&mut self, t: &str) -> Result<(PropValue, usize, usize), Error> {
+        let start = self.pos;
+        let v = match t {
+            "StrProperty" => {
+                let n = self.i32()?;
+                let vstart = self.pos;
+                let s = self.fstring_body(n)?;
+                return Ok((PropValue::Str(s), vstart, self.pos));
+            }
             "IntProperty" => PropValue::Int(self.i32()?),
             "FloatProperty" => PropValue::Float(self.f32()?),
             "BoolProperty" => {
@@ -478,7 +512,6 @@ impl<'a> Walker<'a> {
                 }
                 PropValue::Bool(b == 1)
             }
-            "StrProperty" => PropValue::Str(self.fstring()?),
             "NameProperty" => PropValue::Name(self.fname()?),
             "ObjectProperty" => PropValue::Object(self.i32()?),
             "ByteProperty" => PropValue::Byte {
@@ -487,7 +520,8 @@ impl<'a> Walker<'a> {
             },
             "TextProperty" => PropValue::Text(self.read_text()?),
             other => return Err(self.err(format!("unsupported array item type {other}"))),
-        })
+        };
+        Ok((v, start, self.pos))
     }
 
     fn prop_list(&mut self, ctx: &str) -> Result<Vec<Prop>, Error> {
@@ -601,12 +635,16 @@ impl<'a> Walker<'a> {
                             self.skip(16)?;
                             self.skip_guid_flag()?;
                             for _ in 0..count {
+                                let item_start = self.pos;
                                 match custom_kind(&full.value) {
                                     Some((k, n)) => {
                                         self.tick(&format!("customstruct:{}", full.value));
+                                        let value = self.read_custom(k, n)?;
                                         items.push(ArrayElem::Custom {
                                             kind: full.value.clone(),
-                                            value: self.read_custom(k, n)?,
+                                            value,
+                                            start: item_start,
+                                            end: self.pos,
                                         });
                                     }
                                     None => items.push(ArrayElem::Struct(
@@ -617,7 +655,8 @@ impl<'a> Walker<'a> {
                         }
                     } else {
                         for _ in 0..count {
-                            items.push(ArrayElem::Prim(self.array_item_value(&at.value)?));
+                            let (value, start, end) = self.array_item(&at.value)?;
+                            items.push(ArrayElem::Prim { value, start, end });
                         }
                     }
                     p.value = PropValue::Array {
@@ -653,16 +692,18 @@ impl<'a> Walker<'a> {
                 }
                 "StrProperty" => {
                     self.skip_guid_flag()?;
+                    let full_start = self.pos;
+                    let len = self.i32()?;
                     let vstart = self.pos;
-                    p.value = PropValue::Str(self.fstring()?);
+                    p.value = PropValue::Str(self.fstring_body(len)?);
                     p.vstart = vstart;
                     p.vend = self.pos;
-                    if size as usize != self.pos - vstart {
+                    if size as usize != self.pos - full_start {
                         self.mismatches.push(format!(
                             "{ctx}/{}: str size={} consumed={}",
                             p.name,
                             size,
-                            self.pos - vstart
+                            self.pos - full_start
                         ));
                     }
                 }

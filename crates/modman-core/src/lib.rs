@@ -11,6 +11,7 @@ pub mod engine;
 pub mod fragment;
 pub mod manifest;
 pub mod patch;
+pub mod resolver;
 pub mod template;
 
 pub fn version() -> &'static str {
