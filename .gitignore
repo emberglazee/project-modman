@@ -14,3 +14,6 @@ target/
 # OS files
 .DS_Store
 Thumbs.db
+
+# wasm-pack output (built fresh by the Pages workflow)
+web/pkg/

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project Modman — Merge conflicting mods</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>⚙️ Project Modman <span class="sub">— merge conflicting mods</span></h1>
+  <p class="tagline">
+    Merges Project Wingman mods that edit the same files — no metadata, no PSM needed.
+    <strong>Everything runs locally in your browser.</strong> Nothing is uploaded; after loading,
+    this page makes zero network requests.
+  </p>
+</header>
+
+<main>
+  <section class="card" id="step1">
+    <h2><span class="stepnum">1</span> Add the mod paks you want to merge</h2>
+    <div class="drop" id="modDrop">
+      <p>Drag &amp; drop <code>*_P.pak</code> files here, or</p>
+      <label class="btn secondary">Choose files…<input type="file" id="modFiles" accept=".pak" multiple hidden></label>
+    </div>
+    <ul class="filelist" id="modList"></ul>
+    <p class="hint">Merge order: paks are applied in filename order (later ones win conflicts — shown in the report).</p>
+  </section>
+
+  <section class="card" id="step2">
+    <h2><span class="stepnum">2</span> Point at your game's data pak</h2>
+    <div class="drop" id="gameDrop">
+      <p>Pick <code>pakchunk0-WindowsNoEditor.pak</code> — usually at</p>
+      <p class="path">…/Project Wingman/ProjectWingman/Content/Paks/</p>
+      <label class="btn secondary">Choose game pak…<input type="file" id="gameFile" accept=".pak" hidden></label>
+    </div>
+    <p class="filelist" id="gameInfo"></p>
+    <p class="hint">Only a few megabytes are read from it (the index + the datatables being merged) — even though the file is ~16 GB.</p>
+  </section>
+
+  <section class="card">
+    <h2><span class="stepnum">3</span> Merge</h2>
+    <button class="btn primary" id="mergeBtn" disabled>Merge mods</button>
+    <div class="progress" id="progress" hidden>
+      <div class="bar"><div class="fill" id="progressFill"></div></div>
+      <p id="status">…</p>
+    </div>
+    <div id="error" class="error" hidden></div>
+  </section>
+
+  <section class="card" id="resultCard" hidden>
+    <h2>✅ Done — <span id="resultSummary"></span></h2>
+    <button class="btn primary" id="downloadBtn">Download SicarioCombine_P.pak</button>
+    <p class="hint">Drop it into your <code>~mods</code> folder and remove the original conflicting paks.</p>
+    <div id="report"></div>
+  </section>
+</main>
+
+<footer>
+  <p>
+    <a href="https://github.com/emberglazee/project-modman">github.com/emberglazee/project-modman</a>
+    · part of the Project Wingman modding toolkit · the merge engine is the same one the CLI runs
+  </p>
+</footer>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

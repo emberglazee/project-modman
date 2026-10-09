@@ -764,3 +764,164 @@ mod tests {
         );
     }
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Pak-source abstraction + full combine orchestration.
+//
+// Shared by the CLI (filesystem paks) and the wasm page (in-memory paks +
+// a sparse game-pak reader), so both run the exact same merge semantics.
+// ────────────────────────────────────────────────────────────────────────
+
+/// A read-only source of pak entries.
+pub trait PakSource {
+    /// All entry paths (forward slashes).
+    fn files(&self) -> Vec<String>;
+    /// Read one entry's bytes.
+    fn read(&self, path: &str) -> Result<Vec<u8>, ApplyError>;
+}
+
+/// Result of a full combine run.
+#[derive(Debug, Default)]
+pub struct CombineOutcome {
+    /// path -> bytes: merged datatables + pass-through files, ready to pack.
+    pub files: std::collections::BTreeMap<String, Vec<u8>>,
+    /// How many datatables were merged.
+    pub merged: usize,
+    /// Field-level conflicts (later mod wins).
+    pub field_conflicts: Vec<String>,
+    /// Non-datatable files overridden by multiple mods (single-winner).
+    pub pass_through_conflicts: Vec<String>,
+}
+
+/// Combine conflicting override mods over a vanilla base: three-way
+/// datatable merges (later mods win), single-winner pass-through for
+/// everything else. This is the full orchestration both frontends share.
+pub fn combine_sources(
+    base: &dyn PakSource,
+    mods: &[&dyn PakSource],
+    labels: &[String],
+) -> Result<CombineOutcome, ApplyError> {
+    let base_files = base.files();
+    let base_find = |name: &str| -> Option<String> {
+        base_files
+            .iter()
+            .find(|f| f.as_str() == name)
+            .or_else(|| base_files.iter().find(|f| f.ends_with(name)))
+            .cloned()
+    };
+
+    struct Override {
+        ua: Vec<u8>,
+        ue: Vec<u8>,
+        label: String,
+    }
+    let mut dt_overrides: std::collections::BTreeMap<String, Vec<Override>> =
+        std::collections::BTreeMap::new();
+    let mut passthrough: std::collections::BTreeMap<String, (usize, Vec<u8>)> =
+        std::collections::BTreeMap::new();
+    let mut pt_conflicts: Vec<String> = Vec::new();
+
+    for (mi, m) in mods.iter().enumerate() {
+        let records = m.files();
+        let norm = |r: &String| r.replace('\\', "/");
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for r in &records {
+            let n = norm(r);
+            if n.to_ascii_lowercase().ends_with(".uasset") {
+                let uexp_name = format!("{}.uexp", &n[..n.len() - 7]);
+                if let Some(uexp_rec) = records
+                    .iter()
+                    .find(|x| norm(x).eq_ignore_ascii_case(&uexp_name))
+                {
+                    if !seen.insert(n.clone()) {
+                        continue;
+                    }
+                    // The .uexp record belongs to this datatable pair — mark
+                    // it consumed so it never falls through to the
+                    // pass-through (which would clobber the merged output).
+                    seen.insert(norm(uexp_rec));
+                    let Some(vkey) = base_find(&n) else {
+                        // Not a game file: single-winner pass-through pair.
+                        let ua = m.read(r)?;
+                        let ue = m.read(uexp_rec)?;
+                        for (k, b) in [(n.clone(), ua), (norm(uexp_rec), ue)] {
+                            if let Some((prev, _)) = passthrough.get(&k) {
+                                if *prev != mi {
+                                    pt_conflicts.push(k.clone());
+                                }
+                            }
+                            passthrough.insert(k, (mi, b));
+                        }
+                        continue;
+                    };
+                    let vkey_uexp = format!("{}.uexp", &vkey[..vkey.len() - 7]);
+                    let Some(vue_key) = base_find(&vkey_uexp) else {
+                        continue;
+                    };
+                    let ua = m.read(r)?;
+                    let ue = m.read(uexp_rec)?;
+                    let vua = base.read(&vkey)?;
+                    let vue = base.read(&vue_key)?;
+                    if ua == vua && ue == vue {
+                        continue; // not actually an override
+                    }
+                    dt_overrides.entry(n.clone()).or_default().push(Override {
+                        ua,
+                        ue,
+                        label: labels
+                            .get(mi)
+                            .cloned()
+                            .unwrap_or_else(|| format!("override #{mi}")),
+                    });
+                    continue;
+                }
+            }
+            if seen.insert(n.clone()) {
+                let bytes = m.read(r)?;
+                if let Some((prev, _)) = passthrough.get(&n) {
+                    if *prev != mi {
+                        pt_conflicts.push(n.clone());
+                    }
+                }
+                passthrough.insert(n.clone(), (mi, bytes));
+            }
+        }
+    }
+
+    let mut files = std::collections::BTreeMap::new();
+    let mut merged = 0usize;
+    let mut field_conflicts: Vec<String> = Vec::new();
+    for (target, ovs) in &dt_overrides {
+        let Some(vkey) = base_find(target) else {
+            continue;
+        };
+        let vkey_uexp = format!("{}.uexp", &vkey[..vkey.len() - 7]);
+        let Some(vue_key) = base_find(&vkey_uexp) else {
+            continue;
+        };
+        let vua = base.read(&vkey)?;
+        let vue = base.read(&vue_key)?;
+        let refs: Vec<(&[u8], &[u8])> = ovs
+            .iter()
+            .map(|o| (o.ua.as_slice(), o.ue.as_slice()))
+            .collect();
+        let labels: Vec<String> = ovs.iter().map(|o| o.label.clone()).collect();
+        if let Some(c) = merge_datatable_overrides((&vua, &vue), &refs, &labels)? {
+            let short = target.split('/').next_back().unwrap_or(target).to_string();
+            field_conflicts.extend(c.conflicts.iter().map(|x| format!("{short}: {x}")));
+            files.insert(vkey, c.uasset);
+            files.insert(vue_key, c.uexp);
+            merged += 1;
+        }
+    }
+    for (path, (_, bytes)) in &passthrough {
+        files.insert(path.clone(), bytes.clone());
+    }
+
+    Ok(CombineOutcome {
+        files,
+        merged,
+        field_conflicts,
+        pass_through_conflicts: pt_conflicts,
+    })
+}

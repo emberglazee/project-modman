@@ -76,6 +76,18 @@ modman combine <pak-or-dir...> --install-path <game> --output <dir>
 - Every run ends with a **merge report**: the order, every conflict (with mod names and
   values), and warnings.
 
+### Web UI — no install needed
+
+**<https://emberglazee.github.io/project-modman/>** — the same merge engine, compiled to
+WebAssembly and running entirely in your browser:
+
+- Drop your conflicting `*_P.pak` files, point at your game's
+  `pakchunk0-WindowsNoEditor.pak`, hit merge, download the combined pak.
+- **Nothing is uploaded** — the game pak is read in place (a few MB of it, even from a
+  ~16 GB file) via the browser's File API; the page makes zero network requests after
+  loading.
+- Shows the same merge report (order + conflicts) with a friendly UI.
+
 ## Building
 
 Requires Rust 2021 edition or later.

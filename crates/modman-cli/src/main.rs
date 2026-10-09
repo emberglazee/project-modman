@@ -930,145 +930,51 @@ fn cmd_combine(
         return Err("no paks given".to_string());
     }
 
-    let base = modman_pak::PakArchive::open(game_paks.join("pakchunk0-WindowsNoEditor.pak"))
-        .map_err(|e| format!("Pak error: {e}"))?;
-    let base_files = base.files();
-    let base_find = |name: &str| -> Option<String> {
-        base_files
-            .iter()
-            .find(|f| f.as_str() == name)
-            .or_else(|| base_files.iter().find(|f| f.ends_with(name)))
-            .cloned()
-    };
-
-    struct Override {
-        ua: Vec<u8>,
-        ue: Vec<u8>,
-        label: String,
+    // Shared orchestration (same semantics as the wasm page): wrap each pak
+    // as a PakSource and run the core combine.
+    struct ArchiveSource<'a>(&'a modman_pak::PakArchive);
+    impl modman_core::combine::PakSource for ArchiveSource<'_> {
+        fn files(&self) -> Vec<String> {
+            self.0.files()
+        }
+        fn read(&self, path: &str) -> Result<Vec<u8>, modman_core::apply::ApplyError> {
+            self.0
+                .read_entry(path)
+                .map_err(|e| modman_core::apply::ApplyError::Asset(e.to_string()))
+        }
     }
-    let mut dt_overrides: std::collections::BTreeMap<String, Vec<Override>> =
-        std::collections::BTreeMap::new();
-    let mut passthrough: std::collections::BTreeMap<String, (usize, Vec<u8>)> =
-        std::collections::BTreeMap::new();
-    let mut conflicts: Vec<String> = Vec::new();
 
-    for (mi, pak_path) in paks.iter().enumerate() {
+    let base_archive =
+        modman_pak::PakArchive::open(game_paks.join("pakchunk0-WindowsNoEditor.pak"))
+            .map_err(|e| format!("Pak error: {e}"))?;
+    let base_src = ArchiveSource(&base_archive);
+
+    let mut archives = Vec::new();
+    let mut labels = Vec::new();
+    for pak_path in &paks {
         println!("Reading: {}", pak_path.display());
-        let archive = modman_pak::PakArchive::open(pak_path)
+        let a = modman_pak::PakArchive::open(pak_path)
             .map_err(|e| format!("{}: {e}", pak_path.display()))?;
-        let records = archive.files();
-        let norm = |r: &String| r.replace('\\', "/");
-        let mut seen = std::collections::BTreeSet::new();
-        for r in &records {
-            let n = norm(r);
-            if n.to_ascii_lowercase().ends_with(".uasset") {
-                let uexp_name = format!("{}.uexp", &n[..n.len() - 7]);
-                if let Some(uexp_rec) = records
-                    .iter()
-                    .find(|x| norm(x).eq_ignore_ascii_case(&uexp_name))
-                {
-                    if !seen.insert(n.clone()) {
-                        continue;
-                    }
-                    // The .uexp record belongs to this datatable pair — mark
-                    // it consumed so it never falls through to the
-                    // pass-through (which would clobber the merged output).
-                    seen.insert(norm(uexp_rec));
-                    let Some(vkey) = base_find(&n) else {
-                        // Not a game file: single-winner pass-through pair.
-                        let ua = archive.read_entry(r).map_err(|e| e.to_string())?;
-                        let ue = archive.read_entry(uexp_rec).map_err(|e| e.to_string())?;
-                        for (k, b) in [(n.clone(), ua), (norm(uexp_rec), ue)] {
-                            if let Some((prev, _)) = passthrough.get(&k) {
-                                if *prev != mi {
-                                    conflicts.push(k.clone());
-                                }
-                            }
-                            passthrough.insert(k, (mi, b));
-                        }
-                        continue;
-                    };
-                    let vkey_uexp = format!("{}.uexp", &vkey[..vkey.len() - 7]);
-                    let Some(vue_key) = base_find(&vkey_uexp) else {
-                        continue;
-                    };
-                    let ua = archive.read_entry(r).map_err(|e| e.to_string())?;
-                    let ue = archive.read_entry(uexp_rec).map_err(|e| e.to_string())?;
-                    let vua = base.read_entry(&vkey).map_err(|e| e.to_string())?;
-                    let vue = base.read_entry(&vue_key).map_err(|e| e.to_string())?;
-                    if ua == vua && ue == vue {
-                        continue; // not actually an override
-                    }
-                    dt_overrides.entry(n.clone()).or_default().push(Override {
-                        ua,
-                        ue,
-                        label: pak_path
-                            .file_name()
-                            .map(|f| f.to_string_lossy().to_string())
-                            .unwrap_or_else(|| pak_path.display().to_string()),
-                    });
-                    continue;
-                }
-            }
-            if seen.insert(n.clone()) {
-                let bytes = archive.read_entry(r).map_err(|e| e.to_string())?;
-                if let Some((prev, _)) = passthrough.get(&n) {
-                    if *prev != mi {
-                        conflicts.push(n.clone());
-                    }
-                }
-                passthrough.insert(n.clone(), (mi, bytes));
-            }
-        }
-    }
-
-    let mut files: modman_core::merge::FileMap = modman_core::merge::FileMap::new();
-    let mut merged = 0usize;
-    let mut field_conflicts: Vec<String> = Vec::new();
-    for (target, ovs) in &dt_overrides {
-        let Some(vkey) = base_find(target) else {
-            continue;
-        };
-        let vkey_uexp = format!("{}.uexp", &vkey[..vkey.len() - 7]);
-        let Some(vue_key) = base_find(&vkey_uexp) else {
-            continue;
-        };
-        let vua = base.read_entry(&vkey).map_err(|e| e.to_string())?;
-        let vue = base.read_entry(&vue_key).map_err(|e| e.to_string())?;
-        let refs: Vec<(&[u8], &[u8])> = ovs
-            .iter()
-            .map(|o| (o.ua.as_slice(), o.ue.as_slice()))
-            .collect();
-        let labels: Vec<String> = ovs.iter().map(|o| o.label.clone()).collect();
-        match modman_core::combine::merge_datatable_overrides((&vua, &vue), &refs, &labels) {
-            Ok(Some(c)) => {
-                for w in &c.warnings {
-                    eprintln!("  Warning [{target}]: {w}");
-                }
-                let short = target.split('/').next_back().unwrap_or(target).to_string();
-                field_conflicts.extend(c.conflicts.iter().map(|x| format!("{short}: {x}")));
-                println!(
-                    "  Merged {} override(s) into {}",
-                    ovs.len(),
-                    target.split('/').next_back().unwrap_or(target)
-                );
-                files.insert(vkey, c.uasset);
-                files.insert(vue_key, c.uexp);
-                merged += 1;
-            }
-            Ok(None) => {}
-            Err(e) => eprintln!("  Warning: could not merge {target}: {e}"),
-        }
-    }
-    for (path, (_, bytes)) in &passthrough {
-        files.insert(path.clone(), bytes.clone());
-    }
-    for c in &conflicts {
-        eprintln!(
-            "  Warning: '{c}' is overridden by multiple mods — only the last version is kept \
-             (this file type cannot be combined)"
+        labels.push(
+            pak_path
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_else(|| pak_path.display().to_string()),
         );
+        archives.push(a);
     }
+    let srcs: Vec<ArchiveSource> = archives.iter().map(ArchiveSource).collect();
+    let src_refs: Vec<&dyn modman_core::combine::PakSource> = srcs
+        .iter()
+        .map(|s| s as &dyn modman_core::combine::PakSource)
+        .collect();
+
+    let outcome = modman_core::combine::combine_sources(&base_src, &src_refs, &labels)
+        .map_err(|e| format!("Combine error: {e}"))?;
+    let files = outcome.files.clone();
+    let merged = outcome.merged;
+    let conflicts = outcome.pass_through_conflicts.clone();
+    let field_conflicts = outcome.field_conflicts.clone();
 
     if files.is_empty() {
         return Err("nothing to combine (no conflicting overrides found)".to_string());
