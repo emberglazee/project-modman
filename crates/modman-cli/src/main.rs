@@ -67,6 +67,11 @@ enum Commands {
         #[arg(long)]
         install_path: Option<String>,
     },
+    /// Inspect a Sicario patch file (.dtm, .dtp, or embedded _meta build request)
+    Patch {
+        /// Path to the patch file
+        input: String,
+    },
 }
 
 fn main() {
@@ -215,59 +220,18 @@ fn main() {
                     println!("Game: {}", path);
                     println!("Paks: {}", game_paks.display());
 
-                    // Parse all .dtm/.dtp files
+                    // Parse all .dtm/.dtp/.json patch files (kind-aware, lenient).
                     let mut all_mods: Vec<modman_core::manifest::WingmanMod> = Vec::new();
 
                     for pattern in &preset_paths {
-                        let path = std::path::Path::new(pattern);
-                        if path.is_dir() {
-                            if let Ok(entries) = std::fs::read_dir(path) {
-                                for entry in entries.flatten() {
-                                    let p = entry.path();
-                                    if p.extension().is_some_and(|e| e == "dtm" || e == "dtp") {
-                                        match std::fs::read_to_string(&p) {
-                                            Ok(content) => match serde_json::from_str::<
-                                                modman_core::manifest::WingmanMod,
-                                            >(
-                                                &content
-                                            ) {
-                                                Ok(m) => {
-                                                    println!(
-                                                        "  Loaded: {} ({})",
-                                                        m.id,
-                                                        p.display()
-                                                    );
-                                                    all_mods.push(m);
-                                                }
-                                                Err(e) => eprintln!(
-                                                    "  Parse error {}: {}",
-                                                    p.display(),
-                                                    e
-                                                ),
-                                            },
-                                            Err(e) => {
-                                                eprintln!("  Read error {}: {}", p.display(), e)
-                                            }
-                                        }
-                                    }
+                        match load_mods_from_path(std::path::Path::new(pattern)) {
+                            Ok(mods) => {
+                                for m in mods {
+                                    println!("  Loaded: {} ({})", m.label(), pattern);
+                                    all_mods.push(m);
                                 }
                             }
-                        } else if path.is_file()
-                            && path.extension().is_some_and(|e| e == "dtm" || e == "dtp")
-                        {
-                            match std::fs::read_to_string(path) {
-                                Ok(content) => match serde_json::from_str::<
-                                    modman_core::manifest::WingmanMod,
-                                >(&content)
-                                {
-                                    Ok(m) => {
-                                        println!("  Loaded: {} ({})", m.id, path.display());
-                                        all_mods.push(m);
-                                    }
-                                    Err(e) => eprintln!("  Parse error {}: {}", path.display(), e),
-                                },
-                                Err(e) => eprintln!("  Read error {}: {}", path.display(), e),
-                            }
+                            Err(e) => eprintln!("  Load error {}: {}", pattern, e),
                         }
                     }
 
@@ -411,6 +375,12 @@ fn main() {
                 }
             }
         }
+        Some(Commands::Patch { input }) => {
+            if let Err(e) = cmd_patch(&input) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
         None => {
             println!(
                 "Project Modman v{} — a Project Wingman modding utility",
@@ -418,4 +388,142 @@ fn main() {
             );
         }
     }
+}
+
+/// Load all mods from a file or directory (kind-aware, lenient).
+fn load_mods_from_path(
+    path: &std::path::Path,
+) -> Result<Vec<modman_core::manifest::WingmanMod>, String> {
+    let mut out = Vec::new();
+    if path.is_dir() {
+        let entries = std::fs::read_dir(path).map_err(|e| e.to_string())?;
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
+                    if matches!(ext, "dtm" | "dtp" | "json") {
+                        match load_mods_from_file(&p) {
+                            Ok(mods) => out.extend(mods),
+                            Err(e) => eprintln!("  Parse error {}: {}", p.display(), e),
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        out.extend(load_mods_from_file(path)?);
+    }
+    Ok(out)
+}
+
+fn load_mods_from_file(
+    path: &std::path::Path,
+) -> Result<Vec<modman_core::manifest::WingmanMod>, String> {
+    let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut v: serde_json::Value =
+        serde_json::from_str(&modman_core::manifest::sanitize_json(&raw))
+            .map_err(|e| e.to_string())?;
+    modman_core::manifest::normalize_json_keys(&mut v);
+    let obj = v.as_object().ok_or("not a JSON object")?;
+    if obj.contains_key("request") {
+        Ok(modman_core::manifest::parse_meta_request_json(&raw)
+            .map_err(|e| e.to_string())?
+            .request
+            .mods)
+    } else if obj.contains_key("mods") {
+        Ok(modman_core::manifest::parse_preset_json(&raw)
+            .map_err(|e| e.to_string())?
+            .mods)
+    } else {
+        Ok(vec![
+            modman_core::manifest::parse_mod_json(&raw).map_err(|e| e.to_string())?
+        ])
+    }
+}
+
+fn print_mod_summary(m: &modman_core::manifest::WingmanMod, indent: &str) {
+    let flags = if m.sicario.overwrites {
+        " [overwrites]"
+    } else {
+        ""
+    };
+    println!("{indent}- {}{}", m.label(), flags);
+    if let Some(meta) = &m.meta {
+        if !meta.author.is_empty() {
+            println!("{indent}    author: {}", meta.author);
+        }
+    }
+    for (file, sets) in &m.asset_patches {
+        let n: usize = sets.iter().map(|s| s.patches.len()).sum();
+        println!("{indent}    asset: {file} ({n} patch(es))");
+        for s in sets {
+            for p in &s.patches {
+                println!("{indent}      - {:<18} {}", p.patch_type, p.description);
+            }
+        }
+    }
+    for (file, sets) in &m.file_patches {
+        let n: usize = sets.iter().map(|s| s.patches.len()).sum();
+        println!("{indent}    file(hex): {file} ({n} patch(es))");
+        for s in sets {
+            for p in &s.patches {
+                let t = p.patch_type.as_deref().unwrap_or("before");
+                println!("{indent}      - {:<18} {}", t, p.description);
+            }
+        }
+    }
+    if !m.inputs.is_empty() {
+        let ids: Vec<&str> = m.inputs.iter().map(|i| i.id.as_str()).collect();
+        println!("{indent}    inputs: {}", ids.join(", "));
+    }
+    if !m.sicario.enable_steps.is_empty() {
+        let keys: Vec<&str> = m.sicario.enable_steps.keys().map(|s| s.as_str()).collect();
+        println!("{indent}    enableSteps: {}", keys.join(", "));
+    }
+}
+
+fn cmd_patch(path: &str) -> Result<(), String> {
+    let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut v: serde_json::Value =
+        serde_json::from_str(&modman_core::manifest::sanitize_json(&raw))
+            .map_err(|e| e.to_string())?;
+    modman_core::manifest::normalize_json_keys(&mut v);
+    let obj = v.as_object().ok_or("not a JSON object")?;
+    if obj.contains_key("request") {
+        let req =
+            modman_core::manifest::parse_meta_request_json(&raw).map_err(|e| e.to_string())?;
+        println!("Format:      embedded build request (_meta/sicario)");
+        println!(
+            "App:         {} {} ({})",
+            req.app.name, req.app.version, req.app.owner
+        );
+        println!("Request id:  {}", req.request.id);
+        println!("Mods:        {}", req.request.mods.len());
+        for m in &req.request.mods {
+            print_mod_summary(m, "  ");
+        }
+    } else if obj.contains_key("mods") {
+        let p = modman_core::manifest::parse_preset_json(&raw).map_err(|e| e.to_string())?;
+        println!("Format:      preset (.dtp)");
+        println!("Version:     {}", p.version);
+        println!(
+            "Engine:      {}",
+            p.engine_version.as_deref().unwrap_or("-")
+        );
+        if !p.mod_parameters.is_empty() {
+            println!("Parameters:  {}", p.mod_parameters.len());
+            for (k, val) in &p.mod_parameters {
+                println!("  {k} = {val}");
+            }
+        }
+        println!("Mods:        {}", p.mods.len());
+        for m in &p.mods {
+            print_mod_summary(m, "  ");
+        }
+    } else {
+        let m = modman_core::manifest::parse_mod_json(&raw).map_err(|e| e.to_string())?;
+        println!("Format:      mod (.dtm)");
+        print_mod_summary(&m, "");
+    }
+    Ok(())
 }
