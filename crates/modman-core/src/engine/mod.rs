@@ -223,7 +223,6 @@ pub struct BuildPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::WingmanMod;
 
     #[test]
     fn test_compile_simple_mod() {
@@ -241,7 +240,7 @@ mod tests {
             },
             "filePatches": {}
         }"#;
-        let m: WingmanMod = serde_json::from_str(json).unwrap();
+        let m = crate::manifest::parse_mod_json(json).unwrap();
         let plan = plan_build(&m).unwrap();
         assert_eq!(plan.file_patches.len(), 1);
         let patches = &plan.file_patches["test.uasset"];

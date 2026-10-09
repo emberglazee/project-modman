@@ -67,7 +67,7 @@ pub fn apply_variables_to_mod(modm: &mut crate::manifest::WingmanMod) {
         for set in patches.iter_mut() {
             for patch in set.patches.iter_mut() {
                 patch.template = substitute(&patch.template, vars);
-                patch.value = substitute(&patch.value, vars);
+                patch.substitution = substitute(&patch.substitution, vars);
             }
         }
     }
@@ -122,7 +122,7 @@ mod tests {
             },
             "filePatches": {}
         }"#;
-        let mut m: crate::manifest::WingmanMod = serde_json::from_str(json).unwrap();
+        let mut m = crate::manifest::parse_mod_json(json).unwrap();
         apply_variables_to_mod(&mut m);
         let patch = &m.asset_patches["test.uasset"][0].patches[0];
         assert_eq!(patch.value, "FloatProperty:2.0");
