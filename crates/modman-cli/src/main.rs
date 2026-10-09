@@ -550,7 +550,7 @@ fn main() {
             for p in &preset_paths {
                 let pb = std::path::PathBuf::from(p);
                 let files: Vec<std::path::PathBuf> = if pb.is_dir() {
-                    modman_core::components::collect_dtp_files(&[pb.clone()])
+                    modman_core::components::collect_dtp_files(std::slice::from_ref(&pb))
                 } else {
                     vec![pb.clone()]
                 };
