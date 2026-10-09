@@ -52,7 +52,7 @@ enum Commands {
         /// Mount point
         #[arg(short, long, default_value = "../../../")]
         mount_point: String,
-        /// PAK version (V8B or V11, default: V11)
+        /// PAK version (V3, V8B or V11, default: V11)
         #[arg(long, default_value = "V11")]
         version: String,
         /// Compression algorithm (zlib, gzip, zstd, lz4)
@@ -66,6 +66,9 @@ enum Commands {
         /// Path to the game install directory (auto-detected if omitted)
         #[arg(long)]
         install_path: Option<String>,
+        /// Write the merged mod (SicarioMerge_P.pak) to this directory; omit for a preview
+        #[arg(long)]
+        output: Option<String>,
     },
     /// Inspect a Sicario patch file (.dtm, .dtp, or embedded _meta build request)
     Patch {
@@ -175,10 +178,14 @@ fn main() {
         }) => {
             let output_path = output.unwrap_or_else(|| format!("{}.pak", input));
             let ver = match version.to_uppercase().as_str() {
+                "V3" => modman_pak::Version::V3,
                 "V8B" => modman_pak::Version::V8B,
                 "V11" => modman_pak::Version::V11,
                 _ => {
-                    eprintln!("Error: unsupported version '{}'. Use V8B or V11.", version);
+                    eprintln!(
+                        "Error: unsupported version '{}'. Use V3, V8B or V11.",
+                        version
+                    );
                     std::process::exit(1);
                 }
             };
@@ -213,6 +220,7 @@ fn main() {
         Some(Commands::Build {
             preset_paths,
             install_path,
+            output,
         }) => {
             // Determine game path
             let game_path = install_path.clone().or_else(|| {
@@ -248,6 +256,134 @@ fn main() {
                     // Apply template variables to each mod
                     for m in &mut all_mods {
                         modman_core::template::apply_variables_to_mod(m);
+                    }
+
+                    if let Some(out_dir) = output.as_ref() {
+                        // === WRITE MODE: merge + emit a real mod pak ===
+                        let out_dir = std::path::PathBuf::from(out_dir);
+                        let staging = out_dir.join("staging");
+                        let _ = std::fs::remove_dir_all(&staging);
+                        std::fs::create_dir_all(&staging).unwrap();
+
+                        for m in &all_mods {
+                            if !m.file_patches.is_empty() {
+                                eprintln!(
+                                    "  Warning: {} has filePatches (not yet supported); skipped",
+                                    m.label()
+                                );
+                            }
+                        }
+
+                        // Targets = union of every mod's asset patch targets.
+                        let mut targets: std::collections::BTreeSet<String> =
+                            std::collections::BTreeSet::new();
+                        for m in &all_mods {
+                            targets.extend(m.asset_patches.keys().cloned());
+                        }
+
+                        let main_pak_path = game_paks.join("pakchunk0-WindowsNoEditor.pak");
+                        let pak = match modman_pak::PakArchive::open(&main_pak_path) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                eprintln!("Pak error: {}", e);
+                                std::process::exit(1);
+                            }
+                        };
+                        let all_files = pak.files();
+                        let extract_dir = std::env::temp_dir().join("modman-build");
+                        let _ = std::fs::remove_dir_all(&extract_dir);
+                        std::fs::create_dir_all(&extract_dir).unwrap();
+
+                        let mod_refs: Vec<&modman_core::manifest::WingmanMod> =
+                            all_mods.iter().collect();
+                        let mut ok = 0usize;
+                        for target in &targets {
+                            println!("Merging: {target}");
+                            let needle = target.trim_start_matches("../../../").replace('\\', "/");
+                            let uexp_needle = if needle.ends_with(".uexp") {
+                                needle.clone()
+                            } else if needle.ends_with(".uasset") {
+                                needle.replace(".uasset", ".uexp")
+                            } else {
+                                format!("{needle}.uexp")
+                            };
+                            let uasset_needle = uexp_needle.replace(".uexp", ".uasset");
+                            let find_entry = |name: &str| -> Option<String> {
+                                all_files
+                                    .iter()
+                                    .find(|f| f.as_str() == name)
+                                    .or_else(|| all_files.iter().find(|f| f.ends_with(name)))
+                                    .cloned()
+                            };
+                            let (Some(uasset_entry), Some(uexp_entry)) =
+                                (find_entry(&uasset_needle), find_entry(&uexp_needle))
+                            else {
+                                eprintln!("  Warning: no pak entries for '{target}'; skipped");
+                                continue;
+                            };
+                            let stem = std::path::Path::new(&uexp_entry)
+                                .file_stem()
+                                .map(|s| s.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "asset".to_string());
+                            let local_uasset = extract_dir.join(format!("{stem}.uasset"));
+                            let local_uexp = extract_dir.join(format!("{stem}.uexp"));
+                            if let Err(e) = pak.extract_entry(&uasset_entry, &local_uasset) {
+                                eprintln!("  Extract error ({}): {}", uasset_entry, e);
+                                continue;
+                            }
+                            if let Err(e) = pak.extract_entry(&uexp_entry, &local_uexp) {
+                                eprintln!("  Extract error ({}): {}", uexp_entry, e);
+                                continue;
+                            }
+                            let uasset = std::fs::read(&local_uasset).unwrap();
+                            let uexp = std::fs::read(&local_uexp).unwrap();
+                            let merged = match modman_core::merge::merge_mods(
+                                &uasset, &uexp, &mod_refs, target,
+                            ) {
+                                Ok(m) => m,
+                                Err(e) => {
+                                    eprintln!("  Merge error on {target}: {e}");
+                                    std::process::exit(1);
+                                }
+                            };
+                            let out_uexp = staging.join(&needle);
+                            let out_uasset =
+                                staging.join(uasset_needle.replace(".uexp", ".uasset"));
+                            if let Some(parent) = out_uexp.parent() {
+                                std::fs::create_dir_all(parent).unwrap();
+                            }
+                            std::fs::write(&out_uexp, &merged.uexp).unwrap();
+                            std::fs::write(&out_uasset, &merged.uasset).unwrap();
+                            println!(
+                                "  -> {} bytes uexp, {} bytes uasset",
+                                merged.uexp.len(),
+                                merged.uasset.len()
+                            );
+                            ok += 1;
+                        }
+                        if ok == 0 {
+                            eprintln!("No targets merged.");
+                            std::process::exit(1);
+                        }
+                        let pak_out = out_dir.join("SicarioMerge_P.pak");
+                        match modman_pak::pack(
+                            &staging,
+                            &pak_out,
+                            modman_pak::Version::V3,
+                            "../../../".to_string(),
+                            None,
+                        ) {
+                            Ok(()) => println!(
+                                "\nWrote {} ({} target file(s) merged)",
+                                pak_out.display(),
+                                ok
+                            ),
+                            Err(e) => {
+                                eprintln!("Pack error: {}", e);
+                                std::process::exit(1);
+                            }
+                        }
+                        return;
                     }
 
                     // Merge all mods into a single build plan
