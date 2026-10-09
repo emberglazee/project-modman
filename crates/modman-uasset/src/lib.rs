@@ -67,6 +67,45 @@ pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// The class name of a uasset's first export (e.g. "DataTable",
+/// "Texture2D", "SoundWave"), resolved through the import table.
+///
+/// Lets callers distinguish real DataTables (field-mergeable) from opaque
+/// assets (textures, audio, meshes — single-winner by nature).
+pub fn asset_class(uasset: &[u8]) -> Result<String, Error> {
+    use std::io::{Cursor, Seek, SeekFrom};
+    let mut c = Cursor::new(uasset);
+    let header = PackageHeader::read(&mut c)?;
+    if header.export_count < 1 {
+        return Err(Error::Parse("no exports".into()));
+    }
+    c.seek(SeekFrom::Start(header.export_offset as u64))?;
+    let exports = export::read_export_map(&mut c, header.export_count)?;
+    let ex = exports
+        .first()
+        .ok_or_else(|| Error::Parse("no exports".into()))?;
+    if !ex.class_index.is_import() {
+        return Err(Error::Parse("export class is not an import".into()));
+    }
+    let imp_idx = (-ex.class_index.index - 1) as usize;
+    if imp_idx >= header.import_count.max(0) as usize {
+        return Err(Error::Parse("export class import out of range".into()));
+    }
+    let entry_off = header.import_offset as usize + imp_idx * 28;
+    if entry_off + 28 > uasset.len() {
+        return Err(Error::Parse("import entry out of range".into()));
+    }
+    // FObjectImport: [ClassPackage FName 8][ClassName FName 8][Outer i32][ObjectName FName 8]
+    let name_idx = i32::from_le_bytes(uasset[entry_off + 20..entry_off + 24].try_into().unwrap());
+    let mut nc = Cursor::new(uasset);
+    nc.seek(SeekFrom::Start(header.name_offset as u64))?;
+    let names = names::read_name_table(&mut nc, header.name_count)?;
+    names
+        .get(name_idx.max(0) as usize)
+        .cloned()
+        .ok_or_else(|| Error::Parse(format!("class name index {name_idx} out of range")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

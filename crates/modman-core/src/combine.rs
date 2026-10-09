@@ -91,28 +91,23 @@ pub fn merge_datatable_overrides(
         }
         maps.push(map);
 
-        // Import map: vanilla imports keep their index; a mod's new imports
-        // get positions in the merged table (first-seen order).
+        // Import map, CONTENT-based: mods may replace entries in place (the
+        // F59 skins swap a texture import to their own asset), not just
+        // append. An entry that byte-matches a vanilla entry keeps that
+        // index; anything else is appended to the merged table (first-seen).
         let mimp = rd_i32(ua, 65).max(0) as usize;
         let mimp_off = rd_i32(ua, 69).max(0) as usize;
+        let v_entries: Vec<&[u8]> = (0..vimp)
+            .map(|k| &vua[vimp_off + k * 28..vimp_off + k * 28 + 28])
+            .collect();
         let mut imp_map: Vec<i32> = Vec::with_capacity(mimp);
-        for k in 0..mimp.min(vimp) {
-            let v_entry = &vua[vimp_off + k * 28..vimp_off + k * 28 + 28];
-            let m_entry = &ua[mimp_off + k * 28..mimp_off + k * 28 + 28];
-            if v_entry != m_entry {
-                warnings.push(format!(
-                    "override #{i}: import table diverges from vanilla at index {k} \
-                     — merge may be unreliable"
-                ));
-                break;
-            }
-            imp_map.push(k as i32);
-        }
-        if mimp > vimp {
-            for k in vimp..mimp {
-                let entry: [u8; 28] = ua[mimp_off + k * 28..mimp_off + k * 28 + 28]
-                    .try_into()
-                    .unwrap();
+        for k in 0..mimp {
+            let entry: [u8; 28] = ua[mimp_off + k * 28..mimp_off + k * 28 + 28]
+                .try_into()
+                .unwrap();
+            if let Some(vi) = v_entries.iter().position(|e| **e == entry) {
+                imp_map.push(vi as i32);
+            } else {
                 let pos = merged_imports
                     .iter()
                     .position(|(e, _)| e == &entry)
@@ -643,6 +638,81 @@ mod tests {
         );
     }
 
+    /// A mod that REPLACES an import entry in place (not just appends) must
+    /// merge: the replaced entry is carried as a new import and uexp refs
+    /// into it remap to the appended position (the F59-skins case).
+    #[test]
+    fn replaced_import_entry_is_carried() {
+        let vua = fixture("DB_Aircraft.uasset");
+        let vue = fixture("DB_Aircraft.uexp");
+        let mua = fixture("DB_Aircraft.skin.merged.uasset");
+        let mue = fixture("DB_Aircraft.skin.merged.uexp");
+
+        // Point one existing import entry at a different (valid) name index,
+        // simulating a mod that swaps an asset reference in place.
+        let mut patched = mua.clone();
+        let imp_off = i32::from_le_bytes(patched[69..73].try_into().unwrap()) as usize;
+        let names_count = i32::from_le_bytes(patched[41..45].try_into().unwrap());
+        let old = i32::from_le_bytes(patched[imp_off + 20..imp_off + 24].try_into().unwrap());
+        let new = if old == 0 { 1 } else { 0 };
+        assert!(new < names_count);
+        patched[imp_off + 20..imp_off + 24].copy_from_slice(&new.to_le_bytes());
+
+        let out =
+            merge_datatable_overrides((&vua, &vue), &[(&patched, &mue)], &["swap".to_string()])
+                .unwrap()
+                .expect("merge");
+
+        // The swapped entry must exist in the merged import table, and all
+        // package refs in the output must resolve.
+        let mimp = i32::from_le_bytes(out.uasset[65..69].try_into().unwrap()) as usize;
+        let m_off = i32::from_le_bytes(out.uasset[69..73].try_into().unwrap()) as usize;
+        let swapped = (0..mimp).any(|i| {
+            i32::from_le_bytes(
+                out.uasset[m_off + i * 28 + 20..m_off + i * 28 + 24]
+                    .try_into()
+                    .unwrap(),
+            ) == new
+        });
+        assert!(
+            swapped,
+            "swapped import entry must be carried into the merged table"
+        );
+
+        let dt = DataTable::walk_bytes(&out.uasset, &out.uexp).unwrap();
+        fn check(p: &Prop, mimp: usize, bad: &mut usize) {
+            match &p.value {
+                PropValue::Object(v) => {
+                    if *v < -(mimp as i32) {
+                        *bad += 1;
+                    }
+                }
+                PropValue::Struct { children } => {
+                    for c in children {
+                        check(c, mimp, bad);
+                    }
+                }
+                PropValue::Array { items, .. } => {
+                    for it in items {
+                        if let modman_uasset::walk::ArrayElem::Struct(props) = it {
+                            for c in props {
+                                check(c, mimp, bad);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut bad = 0usize;
+        for r in &dt.rows {
+            for p in &r.props {
+                check(p, mimp, &mut bad);
+            }
+        }
+        assert_eq!(bad, 0, "no out-of-range package refs after the merge");
+    }
+
     /// A single override must reproduce the mod's datatable content exactly:
     /// same rows (names + bytes) in the same order, and the name table =
     /// vanilla + the mod's extras.
@@ -791,6 +861,8 @@ pub struct CombineOutcome {
     pub field_conflicts: Vec<String>,
     /// Non-datatable files overridden by multiple mods (single-winner).
     pub pass_through_conflicts: Vec<String>,
+    /// Merge warnings (divergences, unmergeable files, etc).
+    pub warnings: Vec<String>,
 }
 
 /// Combine conflicting override mods over a vanilla base: three-way
@@ -860,6 +932,21 @@ pub fn combine_sources(
                     };
                     let ua = m.read(r)?;
                     let ue = m.read(uexp_rec)?;
+                    // Only real DataTables are field-mergeable. Opaque assets
+                    // (textures, audio, meshes) that happen to ship a
+                    // .uasset+.uexp pair pass through single-winner — their
+                    // payloads (pixels, samples, vertices) cannot be merged.
+                    if modman_uasset::asset_class(&ua).ok().as_deref() != Some("DataTable") {
+                        for (k, b) in [(n.clone(), ua), (norm(uexp_rec), ue)] {
+                            if let Some((prev, _)) = passthrough.get(&k) {
+                                if *prev != mi {
+                                    pt_conflicts.push(k.clone());
+                                }
+                            }
+                            passthrough.insert(k, (mi, b));
+                        }
+                        continue;
+                    }
                     let vua = base.read(&vkey)?;
                     let vue = base.read(&vue_key)?;
                     if ua == vua && ue == vue {
@@ -891,6 +978,7 @@ pub fn combine_sources(
     let mut files = std::collections::BTreeMap::new();
     let mut merged = 0usize;
     let mut field_conflicts: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
     for (target, ovs) in &dt_overrides {
         let Some(vkey) = base_find(target) else {
             continue;
@@ -906,12 +994,28 @@ pub fn combine_sources(
             .map(|o| (o.ua.as_slice(), o.ue.as_slice()))
             .collect();
         let labels: Vec<String> = ovs.iter().map(|o| o.label.clone()).collect();
-        if let Some(c) = merge_datatable_overrides((&vua, &vue), &refs, &labels)? {
-            let short = target.split('/').next_back().unwrap_or(target).to_string();
-            field_conflicts.extend(c.conflicts.iter().map(|x| format!("{short}: {x}")));
-            files.insert(vkey, c.uasset);
-            files.insert(vue_key, c.uexp);
-            merged += 1;
+        match merge_datatable_overrides((&vua, &vue), &refs, &labels) {
+            Ok(Some(c)) => {
+                let short = target.split('/').next_back().unwrap_or(target).to_string();
+                warnings.extend(c.warnings.iter().map(|w| format!("{short}: {w}")));
+                field_conflicts.extend(c.conflicts.iter().map(|x| format!("{short}: {x}")));
+                files.insert(vkey, c.uasset);
+                files.insert(vue_key, c.uexp);
+                merged += 1;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                // Not a mergeable datatable (a texture/mesh that happens to
+                // ship a .uasset+.uexp pair): fall back to single-winner
+                // pass-through of the last override's pair.
+                let short = target.split('/').next_back().unwrap_or(target).to_string();
+                warnings.push(format!(
+                    "{short}: cannot be merged ({e}) — kept the last override's version"
+                ));
+                let last = ovs.last().expect("override list is non-empty");
+                files.insert(vkey, last.ua.clone());
+                files.insert(vue_key, last.ue.clone());
+            }
         }
     }
     for (path, (_, bytes)) in &passthrough {
@@ -923,5 +1027,6 @@ pub fn combine_sources(
         merged,
         field_conflicts,
         pass_through_conflicts: pt_conflicts,
+        warnings,
     })
 }

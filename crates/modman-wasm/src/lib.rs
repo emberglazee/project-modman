@@ -277,6 +277,7 @@ impl MergeSession {
             "order": labels,
             "conflicts": outcome.field_conflicts,
             "passThroughConflicts": outcome.pass_through_conflicts,
+            "warnings": outcome.warnings,
         });
         Ok((cursor.into_inner(), report.to_string()))
     }

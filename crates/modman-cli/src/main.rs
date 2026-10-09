@@ -975,6 +975,10 @@ fn cmd_combine(
     let merged = outcome.merged;
     let conflicts = outcome.pass_through_conflicts.clone();
     let field_conflicts = outcome.field_conflicts.clone();
+    let warnings = outcome.warnings.clone();
+    for w in &warnings {
+        eprintln!("  Warning: {w}");
+    }
 
     if files.is_empty() {
         return Err("nothing to combine (no conflicting overrides found)".to_string());
@@ -1012,7 +1016,7 @@ fn cmd_combine(
                 .unwrap_or_else(|| p.display().to_string())
         })
         .collect();
-    let other_warnings: Vec<String> = conflicts
+    let mut other_warnings: Vec<String> = conflicts
         .iter()
         .map(|c| {
             format!(
@@ -1021,6 +1025,7 @@ fn cmd_combine(
             )
         })
         .collect();
+    other_warnings.extend(warnings.iter().cloned());
     print_merge_report(
         "Combine report",
         &order,
