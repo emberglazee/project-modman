@@ -11,4 +11,5 @@ clap.workspace = true
 modman-pak = { path = "../modman-pak" }
 modman-core = { path = "../modman-core" }
 modman-uasset = { path = "../modman-uasset" }
+serde.workspace = true
 serde_json.workspace = true

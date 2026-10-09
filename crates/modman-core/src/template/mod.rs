@@ -20,21 +20,14 @@ use std::collections::HashMap;
 use crate::manifest::{FilePatch, Patch, WingmanMod};
 use crate::templating::{self, Vars};
 
-/// Request-level template inputs. CLI builds carry none (the C# merger only
-/// fills these from interactive parameter prompts).
-fn request_inputs() -> Vars {
-    Vars::new()
-}
-
 /// Render the mod's `_vars` map into a lookup table.
-pub fn render_mod_variables(modm: &WingmanMod) -> Vars {
-    let inputs = request_inputs();
+pub fn render_mod_variables(modm: &WingmanMod, inputs: &Vars) -> Vars {
     let mut rendered: Vars = Vars::new();
     let mut keys: Vec<&String> = modm.variables.keys().collect();
     keys.sort();
     for key in keys {
         let raw = &modm.variables[key];
-        let value = templating::render(raw, &inputs, &rendered);
+        let value = templating::render(raw, inputs, &rendered);
         rendered.insert(key.clone(), value);
     }
     rendered
@@ -72,26 +65,27 @@ fn render_asset_patch(patch: &mut Patch, inputs: &Vars, vars: &Vars) {
 }
 
 /// Apply the full template pipeline to a mod in place.
-pub fn apply_variables_to_mod(modm: &mut WingmanMod) {
-    let inputs = request_inputs();
-    let vars = render_mod_variables(modm);
+///
+/// `inputs` are the request template inputs (the merged preset parameters).
+pub fn apply_variables_to_mod(modm: &mut WingmanMod, inputs: &Vars) {
+    let vars = render_mod_variables(modm, inputs);
     let steps = modm.sicario.enable_steps.clone();
 
     for sets in modm.file_patches.values_mut() {
-        sets.retain(|set| set_enabled(&set.name, &steps, &inputs, &vars));
+        sets.retain(|set| set_enabled(&set.name, &steps, inputs, &vars));
         for set in sets.iter_mut() {
             for patch in set.patches.iter_mut() {
-                render_file_patch(patch, &inputs, &vars);
+                render_file_patch(patch, inputs, &vars);
             }
         }
     }
     modm.file_patches.retain(|_, sets| !sets.is_empty());
 
     for sets in modm.asset_patches.values_mut() {
-        sets.retain(|set| set_enabled(&set.name, &steps, &inputs, &vars));
+        sets.retain(|set| set_enabled(&set.name, &steps, inputs, &vars));
         for set in sets.iter_mut() {
             for patch in set.patches.iter_mut() {
-                render_asset_patch(patch, &inputs, &vars);
+                render_asset_patch(patch, inputs, &vars);
             }
         }
     }
@@ -111,7 +105,7 @@ mod tests {
             ]}]}
         }"#;
         let mut m = parse_mod_json(json).unwrap();
-        apply_variables_to_mod(&mut m);
+        apply_variables_to_mod(&mut m, &Vars::new());
         let patch = &m.asset_patches["x"][0].patches[0];
         assert_eq!(patch.template, "FloatProperty:2.0");
     }
@@ -126,7 +120,7 @@ mod tests {
             ]}]}
         }"#;
         let mut m = parse_mod_json(json).unwrap();
-        apply_variables_to_mod(&mut m);
+        apply_variables_to_mod(&mut m, &Vars::new());
         assert_eq!(m.asset_patches["x"][0].patches[0].value, "");
     }
 
@@ -140,7 +134,7 @@ mod tests {
             ]}]}
         }"#;
         let mut m = parse_mod_json(json).unwrap();
-        apply_variables_to_mod(&mut m);
+        apply_variables_to_mod(&mut m, &Vars::new());
         let patch = &m.file_patches["f.uexp"][0].patches[0];
         assert_eq!(patch.template.as_deref(), Some("ED "));
         assert_eq!(patch.value.as_deref(), Some("EE "));
@@ -170,7 +164,7 @@ mod tests {
             ]}]}
         }"#;
         let mut m = parse_mod_json(json).unwrap();
-        apply_variables_to_mod(&mut m);
+        apply_variables_to_mod(&mut m, &Vars::new());
         assert!(m.asset_patches["x"].is_empty());
     }
 
@@ -185,7 +179,7 @@ mod tests {
             ]}
         }"#;
         let mut m = parse_mod_json(json).unwrap();
-        apply_variables_to_mod(&mut m);
+        apply_variables_to_mod(&mut m, &Vars::new());
         assert_eq!(m.asset_patches["x"].len(), 2);
     }
 
@@ -199,7 +193,7 @@ mod tests {
             ]}]}
         }"#;
         let mut m = parse_mod_json(json).unwrap();
-        apply_variables_to_mod(&mut m);
+        apply_variables_to_mod(&mut m, &Vars::new());
         assert!(m.file_patches.is_empty());
     }
 
@@ -213,7 +207,7 @@ mod tests {
             ]}]}
         }"#;
         let mut m = parse_mod_json(json).unwrap();
-        apply_variables_to_mod(&mut m);
+        apply_variables_to_mod(&mut m, &Vars::new());
         // Sorted order renders `a` before `b`.
         assert_eq!(m.asset_patches["x"][0].patches[0].template, "hello world");
     }

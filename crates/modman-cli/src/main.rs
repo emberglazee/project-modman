@@ -69,6 +69,9 @@ enum Commands {
         /// Write the merged mod (SicarioMerge_P.pak) to this directory; omit for a preview
         #[arg(long)]
         output: Option<String>,
+        /// Write a merge report (JSON) to this file (relative paths go next to the output)
+        #[arg(long)]
+        report: Option<String>,
     },
     /// Inspect a Sicario patch file (.dtm, .dtp, or embedded _meta build request)
     Patch {
@@ -221,6 +224,7 @@ fn main() {
             preset_paths,
             install_path,
             output,
+            report,
         }) => {
             // Determine game path
             let game_path = install_path.clone().or_else(|| {
@@ -233,29 +237,70 @@ fn main() {
                     println!("Game: {}", path);
                     println!("Paks: {}", game_paks.display());
 
-                    // Parse all .dtm/.dtp/.json patch files (kind-aware, lenient).
-                    let mut all_mods: Vec<modman_core::manifest::WingmanMod> = Vec::new();
+                    use modman_core::components as comps;
 
+                    // --- Assemble merge components (C# provider parity) ---
+                    // Loose presets: *.dtp from given dirs + the install's
+                    // default search paths; direct file arguments load as-is.
+                    let mut search_dirs: Vec<std::path::PathBuf> = Vec::new();
+                    let mut direct_mods: Vec<modman_core::manifest::WingmanMod> = Vec::new();
                     for pattern in &preset_paths {
-                        match load_mods_from_path(std::path::Path::new(pattern)) {
-                            Ok(mods) => {
-                                for m in mods {
-                                    println!("  Loaded: {} ({})", m.label(), pattern);
-                                    all_mods.push(m);
-                                }
+                        let pb = std::path::PathBuf::from(pattern);
+                        if pb.is_dir() {
+                            search_dirs.push(pb);
+                        } else {
+                            match load_mods_from_file(&pb) {
+                                Ok(mods) => direct_mods.extend(mods),
+                                Err(e) => eprintln!("  Load error {}: {}", pattern, e),
                             }
-                            Err(e) => eprintln!("  Load error {}: {}", pattern, e),
                         }
                     }
-
-                    if all_mods.is_empty() {
-                        eprintln!("No valid mod files found.");
-                        std::process::exit(1);
+                    search_dirs.push(
+                        std::path::PathBuf::from(&path).join("ProjectWingman/Content/Presets"),
+                    );
+                    search_dirs.push(game_paks.join("~mods"));
+                    search_dirs.push(game_paks.join("~presets"));
+                    let loose_files = comps::collect_dtp_files(&search_dirs);
+                    let (mut loose_comp, warnings) =
+                        comps::loose_component(&loose_files, comps::ENGINE_VERSION);
+                    for w in &warnings {
+                        eprintln!("  Warning: {w}");
+                    }
+                    for m in direct_mods {
+                        println!("  Loaded: {} (direct)", m.label());
+                        loose_comp.mods.push(m);
                     }
 
-                    // Apply template variables to each mod
+                    // Embedded components from installed paks.
+                    let scan = modman_core::discovery::scan_paks_dir(&game_paks);
+                    let (mut embedded, warnings) =
+                        comps::embedded_components(&scan, comps::ENGINE_VERSION);
+                    for w in &warnings {
+                        eprintln!("  Warning: {w}");
+                    }
+
+                    // Provider order (also the report order):
+                    // embeddedPresets, sicarioRequests, loosePresets.
+                    let mut components: Vec<comps::MergeComponent> = Vec::new();
+                    components.append(&mut embedded);
+                    components.push(loose_comp);
+                    for c in &components {
+                        println!("  {}", c.message);
+                    }
+
+                    let inputs = comps::merged_params(&components);
+                    println!("Final mod will be built with {} parameters", inputs.len());
+
+                    let mut all_mods = comps::take_ordered_mods(&mut components);
+                    if all_mods.is_empty() {
+                        eprintln!("No mods or presets found to build!");
+                        std::process::exit(1);
+                    }
+                    println!("Queuing mod build with {} mods", all_mods.len());
+
+                    // Apply the template pipeline (vars + enableSteps + patch render).
                     for m in &mut all_mods {
-                        modman_core::template::apply_variables_to_mod(m);
+                        modman_core::template::apply_variables_to_mod(m, &inputs);
                     }
 
                     if let Some(out_dir) = output.as_ref() {
@@ -415,6 +460,23 @@ fn main() {
                             Err(e) => {
                                 eprintln!("Pack error: {}", e);
                                 std::process::exit(1);
+                            }
+                        }
+
+                        if let Some(report_name) = report.as_ref() {
+                            let report_path = {
+                                let p = std::path::PathBuf::from(report_name);
+                                if p.is_absolute() {
+                                    p
+                                } else {
+                                    out_dir.join(p)
+                                }
+                            };
+                            match write_report(&report_path, &inputs, &components) {
+                                Ok(()) => {
+                                    println!("Wrote merge report to '{}'.", report_path.display())
+                                }
+                                Err(e) => eprintln!("  Warning: error writing report file: {e}"),
                             }
                         }
                         return;
@@ -631,31 +693,6 @@ fn main() {
 }
 
 /// Load all mods from a file or directory (kind-aware, lenient).
-fn load_mods_from_path(
-    path: &std::path::Path,
-) -> Result<Vec<modman_core::manifest::WingmanMod>, String> {
-    let mut out = Vec::new();
-    if path.is_dir() {
-        let entries = std::fs::read_dir(path).map_err(|e| e.to_string())?;
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_file() {
-                if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-                    if matches!(ext, "dtm" | "dtp" | "json") {
-                        match load_mods_from_file(&p) {
-                            Ok(mods) => out.extend(mods),
-                            Err(e) => eprintln!("  Parse error {}: {}", p.display(), e),
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        out.extend(load_mods_from_file(path)?);
-    }
-    Ok(out)
-}
-
 fn load_mods_from_file(
     path: &std::path::Path,
 ) -> Result<Vec<modman_core::manifest::WingmanMod>, String> {
@@ -778,4 +815,36 @@ fn resolve_paks_dir(path: &str) -> std::path::PathBuf {
     } else {
         p.to_path_buf()
     }
+}
+
+/// Write the merge report (C# `JsonReportWriter` shape).
+fn write_report(
+    path: &std::path::Path,
+    inputs: &modman_core::templating::Vars,
+    components: &[modman_core::components::MergeComponent],
+) -> Result<(), String> {
+    fn indented(v: &impl serde::Serialize) -> Result<String, String> {
+        let s = serde_json::to_string_pretty(v).map_err(|e| e.to_string())?;
+        Ok(s.lines()
+            .enumerate()
+            .map(|(i, l)| {
+                if i == 0 {
+                    l.to_string()
+                } else {
+                    format!("  {l}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"))
+    }
+    let mut s = String::from("{\n  \"inputParameters\": ");
+    s.push_str(&indented(inputs)?);
+    for c in components {
+        if !c.name.is_empty() && !c.resources.is_empty() {
+            s.push_str(&format!(",\n  \"{}\": ", c.name));
+            s.push_str(&indented(&c.resources)?);
+        }
+    }
+    s.push_str("\n}");
+    std::fs::write(path, s).map_err(|e| e.to_string())
 }

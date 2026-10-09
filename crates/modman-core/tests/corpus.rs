@@ -107,7 +107,7 @@ fn spot_checks() {
     let p = parse_preset_json(&raw).unwrap();
     assert_eq!(p.mods.len(), 1);
     let m = &p.mods[0];
-    assert_eq!(m.label(), "SPEAR Unlock");
+    assert_eq!(m.label(), "SPEAR Unlock (by agc93 & JohnVicres)");
     let sets = m
         .asset_patches
         .get("ProjectWingman/Content/ProjectWingman/Blueprints/Data/AircraftData/DB_Aircraft.uexp")

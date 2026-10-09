@@ -17,7 +17,7 @@ fn scans_fixture_paks() {
     assert_eq!(c.kind, ComponentKind::BuildRequest);
     assert!(c.record_path.to_ascii_lowercase().contains("_meta/sicario"));
     assert_eq!(c.mods.len(), 1);
-    assert_eq!(c.mods[0].label(), "New and Improved Chimera");
+    assert_eq!(c.mods[0].label(), "New and Improved Chimera (by agc93)");
     assert_eq!(c.mods[0].patch_count(), 15);
 }
 

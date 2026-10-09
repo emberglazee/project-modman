@@ -316,6 +316,7 @@ dependencies = [
  "modman-core",
  "modman-pak",
  "modman-uasset",
+ "serde",
  "serde_json",
 ]
 

@@ -49,10 +49,9 @@ pub fn apply_length_changing(
     modm: &WingmanMod,
     target: &str,
 ) -> Result<LengthChangingResult, ApplyError> {
-    // The C# applies Liquid templating at load time; mirror that here.
-    let mut substituted = modm.clone();
-    crate::template::apply_variables_to_mod(&mut substituted);
-    let Some(sets) = substituted.asset_patches.get(target) else {
+    // Templating is applied by the pipeline (template::apply_variables_to_mod)
+    // before merging; the C# engines never re-render.
+    let Some(sets) = modm.asset_patches.get(target) else {
         return Err(ApplyError::Unsupported(format!("no patches for {target}")));
     };
     let patches: Vec<&Patch> = sets.iter().flat_map(|s| s.patches.iter()).collect();
@@ -545,7 +544,10 @@ mod tests {
 
         let raw = std::fs::read_to_string(&meta).unwrap();
         let req = parse_meta_request_json(&raw).unwrap();
-        let modm = &req.request.mods[0];
+        let mut modm = req.request.mods[0].clone();
+        // The pipeline renders before merging (C# `PatchTemplateBehaviour`).
+        crate::template::apply_variables_to_mod(&mut modm, &crate::templating::Vars::new());
+        let modm = &modm;
 
         let dt = DataTable::load(fixture_stem()).unwrap();
         let uexp = std::fs::read(concat!(

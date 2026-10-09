@@ -6,9 +6,11 @@
 //!   - presets: a record whose path contains `sicario` and ends with `.dtp`
 //!   - build requests: a record under `_meta/sicario/` ending with `.json`
 //!
-//! Each component parses (leniently) into one or more `WingmanMod`s.
+//! C# precedence: a pak carrying a preset contributes ONLY the preset (its
+//! request, if any, is skipped).
 
 use crate::manifest::{parse_meta_request_json, parse_preset_json, WingmanMod};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +27,10 @@ pub struct DiscoveredComponent {
     pub record_path: String,
     pub kind: ComponentKind,
     pub mods: Vec<WingmanMod>,
+    /// Component parameters: preset `modParameters` or request `templateInputs`.
+    pub params: HashMap<String, String>,
+    /// Preset engine version (presets only).
+    pub engine_version: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -93,36 +99,51 @@ fn collect_paks(dir: &Path, out: &mut Vec<PathBuf>) {
 
 fn scan_single_pak(pak_path: &Path, report: &mut ScanReport) -> Result<(), String> {
     let archive = modman_pak::PakArchive::open(pak_path).map_err(|e| e.to_string())?;
-    for record in archive.files() {
-        let norm = record.replace('\\', "/").to_ascii_lowercase();
-        let is_request = norm.contains("_meta/sicario") && norm.ends_with(".json");
-        let is_preset = !is_request && norm.contains("sicario") && norm.ends_with(".dtp");
-        if !is_request && !is_preset {
-            continue;
-        }
+    let records = archive.files();
+
+    // C# precedence: take the first preset record; only if none, the request.
+    let preset_record = records.iter().find(|r| {
+        let norm = r.replace('\\', "/").to_ascii_lowercase();
+        norm.contains("sicario") && norm.ends_with(".dtp")
+    });
+    if let Some(record) = preset_record {
         let bytes = archive
-            .read_entry(&record)
+            .read_entry(record)
             .map_err(|e| format!("{record}: {e}"))?;
         let text = String::from_utf8_lossy(&bytes);
-        let component = if is_request {
-            let req = parse_meta_request_json(&text).map_err(|e| format!("{record}: {e}"))?;
-            DiscoveredComponent {
+        let preset = parse_preset_json(&text).map_err(|e| format!("{record}: {e}"))?;
+        if !preset.mods.is_empty() {
+            report.components.push(DiscoveredComponent {
                 pak_path: pak_path.to_path_buf(),
-                record_path: record,
-                kind: ComponentKind::BuildRequest,
-                mods: req.request.mods,
-            }
-        } else {
-            let preset = parse_preset_json(&text).map_err(|e| format!("{record}: {e}"))?;
-            DiscoveredComponent {
-                pak_path: pak_path.to_path_buf(),
-                record_path: record,
+                record_path: record.clone(),
                 kind: ComponentKind::Preset,
                 mods: preset.mods,
-            }
-        };
-        if !component.mods.is_empty() {
-            report.components.push(component);
+                params: preset.mod_parameters,
+                engine_version: preset.engine_version,
+            });
+        }
+        return Ok(());
+    }
+
+    let request_record = records.iter().find(|r| {
+        let norm = r.replace('\\', "/").to_ascii_lowercase();
+        norm.contains("_meta/sicario") && norm.ends_with(".json")
+    });
+    if let Some(record) = request_record {
+        let bytes = archive
+            .read_entry(record)
+            .map_err(|e| format!("{record}: {e}"))?;
+        let text = String::from_utf8_lossy(&bytes);
+        let req = parse_meta_request_json(&text).map_err(|e| format!("{record}: {e}"))?;
+        if !req.request.mods.is_empty() {
+            report.components.push(DiscoveredComponent {
+                pak_path: pak_path.to_path_buf(),
+                record_path: record.clone(),
+                kind: ComponentKind::BuildRequest,
+                mods: req.request.mods,
+                params: req.request.template_inputs,
+                engine_version: None,
+            });
         }
     }
     Ok(())

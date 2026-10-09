@@ -71,17 +71,22 @@ impl WingmanMod {
         !self.asset_patches.is_empty() || !self.file_patches.is_empty()
     }
 
-    /// Human label: `_meta.displayName`, else `_id`, else "(unnamed)".
+    /// ModEngine.Core `Mod.GetLabel`: display name plus " (by author)" when
+    /// both are present, falling back to "unknown mod".
     pub fn label(&self) -> String {
+        let mut s = String::new();
         if let Some(meta) = &self.meta {
-            if !meta.display_name.is_empty() {
-                return meta.display_name.clone();
+            if !meta.display_name.trim().is_empty() {
+                s.push_str(&meta.display_name);
+            }
+            if !meta.author.trim().is_empty() {
+                s.push_str(&format!(" (by {})", meta.author));
             }
         }
-        if !self.id.is_empty() {
-            return self.id.clone();
+        if s.is_empty() {
+            return "unknown mod".to_string();
         }
-        "(unnamed)".to_string()
+        s
     }
 }
 
@@ -257,6 +262,12 @@ pub struct BuildRequest {
     pub user_name: Option<String>,
     #[serde(default)]
     pub mods: Vec<WingmanMod>,
+    #[serde(default, rename = "templateinputs")]
+    pub template_inputs: HashMap<String, String>,
+    #[serde(default, rename = "packresult")]
+    pub pack_result: Option<bool>,
+    #[serde(default, rename = "additionalfiles")]
+    pub additional_files: HashMap<String, String>,
 }
 
 // ---------------------------------------------------------------------------

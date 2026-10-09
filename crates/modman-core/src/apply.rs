@@ -43,11 +43,10 @@ pub fn plan_same_size_edits(
     modm: &WingmanMod,
     target: &str,
 ) -> Result<Vec<PlannedEdit>, ApplyError> {
-    // The C# applies Liquid templating at load time; mirror that here.
-    let mut substituted = modm.clone();
-    crate::template::apply_variables_to_mod(&mut substituted);
+    // Templating is applied by the pipeline (template::apply_variables_to_mod)
+    // before merging; the C# engines never re-render.
     let mut out = Vec::new();
-    let Some(sets) = substituted.asset_patches.get(target) else {
+    let Some(sets) = modm.asset_patches.get(target) else {
         return Ok(out);
     };
     for set in sets {

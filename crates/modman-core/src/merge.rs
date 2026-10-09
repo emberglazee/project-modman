@@ -190,19 +190,25 @@ mod tests {
             return;
         }
 
-        let spear_mod = parse_preset_json(&std::fs::read_to_string(&spear).unwrap())
+        let mut spear_mod = parse_preset_json(&std::fs::read_to_string(&spear).unwrap())
             .unwrap()
             .mods
             .remove(0);
-        let chimera_mod = parse_meta_request_json(&std::fs::read_to_string(&chimera).unwrap())
+        let mut chimera_mod = parse_meta_request_json(&std::fs::read_to_string(&chimera).unwrap())
             .unwrap()
             .request
             .mods
             .remove(0);
+        // The pipeline renders before merging (C# `PatchTemplateBehaviour`).
+        let inputs = crate::templating::Vars::new();
+        crate::template::apply_variables_to_mod(&mut spear_mod, &inputs);
+        crate::template::apply_variables_to_mod(&mut chimera_mod, &inputs);
 
-        // Component order: embedded requests (chimera) before loose presets (spear).
+        // Component order (C# priorities): embedded presets (P1) → loose
+        // presets (P2) → sicario requests (P3). No conflicts here, but the
+        // order should be faithful.
         let (ua, ue) = pair();
-        let out = merge_mods(&ua, &ue, &[&chimera_mod, &spear_mod], TARGET).unwrap();
+        let out = merge_mods(&ua, &ue, &[&spear_mod, &chimera_mod], TARGET).unwrap();
 
         // Extract the oracle entries from the banked pak.
         let pak = modman_pak::PakArchive::open(&oracle_pak).unwrap();
@@ -288,7 +294,7 @@ mod tests {
             .unwrap()
             .mods;
         for m in &mut mods {
-            crate::template::apply_variables_to_mod(m);
+            crate::template::apply_variables_to_mod(m, &crate::templating::Vars::new());
         }
         let refs: Vec<&WingmanMod> = mods.iter().collect();
         apply_hex_phase(&mut files, &refs).unwrap();
