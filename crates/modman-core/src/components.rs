@@ -358,6 +358,16 @@ fn collect_skin_paks(dir: &Path, out: &mut Vec<PathBuf>) {
             .and_then(|n| n.to_str())
             .is_some_and(|n| n.to_ascii_lowercase().ends_with("_p.pak"))
         {
+            // Skip our own merge outputs: they may embed skin files, and
+            // re-detecting them would re-merge (and re-embed) recursively.
+            let stem = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if stem.starts_with("sicariomerge") || stem.starts_with("sicariocombine") {
+                continue;
+            }
             out.push(path);
         }
     }

@@ -7,6 +7,7 @@
 //! - Mod merging
 
 pub mod apply;
+pub mod combine;
 pub mod components;
 pub mod discovery;
 pub mod engine;

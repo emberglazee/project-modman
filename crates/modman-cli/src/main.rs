@@ -93,6 +93,18 @@ enum Commands {
         #[arg(long)]
         output: Option<String>,
     },
+    /// Combine conflicting override mods (no Sicario metadata needed): merges
+    /// datatable overrides structurally (later mods win conflicts) into one pak
+    Combine {
+        /// Pak files (or directories of paks) to combine, in load-priority order
+        paks: Vec<String>,
+        /// Path to the game install directory (auto-detected if omitted)
+        #[arg(long)]
+        install_path: Option<String>,
+        /// Output directory for the combined pak (default: current directory)
+        #[arg(long)]
+        output: Option<String>,
+    },
     /// Inspect a Sicario patch file (.dtm, .dtp, or embedded _meta build request)
     Patch {
         /// Path to the patch file
@@ -661,6 +673,29 @@ fn main() {
                 }
             }
         }
+        Some(Commands::Combine {
+            paks,
+            install_path,
+            output,
+        }) => {
+            let game_path = install_path.clone().or_else(|| {
+                crate::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
+            });
+            let Some(path) = game_path else {
+                eprintln!("Error: Could not detect Project Wingman installation.");
+                std::process::exit(1);
+            };
+            let game_paks = std::path::Path::new(&path).join("ProjectWingman/Content/Paks");
+            let out_dir = output
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            println!("Game: {path}");
+            if let Err(e) = cmd_combine(&game_paks, &paks, &out_dir) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
         Some(Commands::Patch { input }) => {
             if let Err(e) = cmd_patch(&input) {
                 eprintln!("Error: {}", e);
@@ -829,6 +864,209 @@ fn resolve_paks_dir(path: &str) -> std::path::PathBuf {
     } else {
         p.to_path_buf()
     }
+}
+
+/// Combine conflicting override mods: three-way datatable merges (vanilla +
+/// each mod's delta, later mods win), single-winner pass-through for
+/// non-datatable files, warnings on irreconcilable conflicts.
+fn cmd_combine(
+    game_paks: &std::path::Path,
+    pak_args: &[String],
+    out_dir: &std::path::Path,
+) -> Result<(), String> {
+    // Expand args (files or directories, recursive).
+    fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                collect(&p, out);
+            } else if p
+                .extension()
+                .and_then(|x| x.to_str())
+                .is_some_and(|x| x.eq_ignore_ascii_case("pak"))
+            {
+                out.push(p);
+            }
+        }
+    }
+    let mut paks: Vec<std::path::PathBuf> = Vec::new();
+    for a in pak_args {
+        let p = std::path::PathBuf::from(a);
+        if p.is_dir() {
+            collect(&p, &mut paks);
+        } else {
+            paks.push(p);
+        }
+    }
+    paks.sort();
+    if paks.is_empty() {
+        return Err("no paks given".to_string());
+    }
+
+    let base = modman_pak::PakArchive::open(&game_paks.join("pakchunk0-WindowsNoEditor.pak"))
+        .map_err(|e| format!("Pak error: {e}"))?;
+    let base_files = base.files();
+    let base_find = |name: &str| -> Option<String> {
+        base_files
+            .iter()
+            .find(|f| f.as_str() == name)
+            .or_else(|| base_files.iter().find(|f| f.ends_with(name)))
+            .cloned()
+    };
+
+    struct Override {
+        ua: Vec<u8>,
+        ue: Vec<u8>,
+    }
+    let mut dt_overrides: std::collections::BTreeMap<String, Vec<Override>> =
+        std::collections::BTreeMap::new();
+    let mut passthrough: std::collections::BTreeMap<String, (usize, Vec<u8>)> =
+        std::collections::BTreeMap::new();
+    let mut conflicts: Vec<String> = Vec::new();
+
+    for (mi, pak_path) in paks.iter().enumerate() {
+        println!("Reading: {}", pak_path.display());
+        let archive = modman_pak::PakArchive::open(pak_path)
+            .map_err(|e| format!("{}: {e}", pak_path.display()))?;
+        let records = archive.files();
+        let norm = |r: &String| r.replace('\\', "/");
+        let mut seen = std::collections::BTreeSet::new();
+        for r in &records {
+            let n = norm(r);
+            if n.to_ascii_lowercase().ends_with(".uasset") {
+                let uexp_name = format!("{}.uexp", &n[..n.len() - 7]);
+                if let Some(uexp_rec) = records
+                    .iter()
+                    .find(|x| norm(x).eq_ignore_ascii_case(&uexp_name))
+                {
+                    if !seen.insert(n.clone()) {
+                        continue;
+                    }
+                    // The .uexp record belongs to this datatable pair — mark
+                    // it consumed so it never falls through to the
+                    // pass-through (which would clobber the merged output).
+                    seen.insert(norm(uexp_rec));
+                    let Some(vkey) = base_find(&n) else {
+                        // Not a game file: single-winner pass-through pair.
+                        let ua = archive.read_entry(r).map_err(|e| e.to_string())?;
+                        let ue = archive.read_entry(uexp_rec).map_err(|e| e.to_string())?;
+                        for (k, b) in [(n.clone(), ua), (norm(uexp_rec), ue)] {
+                            if let Some((prev, _)) = passthrough.get(&k) {
+                                if *prev != mi {
+                                    conflicts.push(k.clone());
+                                }
+                            }
+                            passthrough.insert(k, (mi, b));
+                        }
+                        continue;
+                    };
+                    let vkey_uexp = format!("{}.uexp", &vkey[..vkey.len() - 7]);
+                    let Some(vue_key) = base_find(&vkey_uexp) else {
+                        continue;
+                    };
+                    let ua = archive.read_entry(r).map_err(|e| e.to_string())?;
+                    let ue = archive.read_entry(uexp_rec).map_err(|e| e.to_string())?;
+                    let vua = base.read_entry(&vkey).map_err(|e| e.to_string())?;
+                    let vue = base.read_entry(&vue_key).map_err(|e| e.to_string())?;
+                    if ua == vua && ue == vue {
+                        continue; // not actually an override
+                    }
+                    dt_overrides
+                        .entry(n.clone())
+                        .or_default()
+                        .push(Override { ua, ue });
+                    continue;
+                }
+            }
+            if seen.insert(n.clone()) {
+                let bytes = archive.read_entry(r).map_err(|e| e.to_string())?;
+                if let Some((prev, _)) = passthrough.get(&n) {
+                    if *prev != mi {
+                        conflicts.push(n.clone());
+                    }
+                }
+                passthrough.insert(n.clone(), (mi, bytes));
+            }
+        }
+    }
+
+    let mut files: modman_core::merge::FileMap = modman_core::merge::FileMap::new();
+    let mut merged = 0usize;
+    for (target, ovs) in &dt_overrides {
+        let Some(vkey) = base_find(target) else {
+            continue;
+        };
+        let vkey_uexp = format!("{}.uexp", &vkey[..vkey.len() - 7]);
+        let Some(vue_key) = base_find(&vkey_uexp) else {
+            continue;
+        };
+        let vua = base.read_entry(&vkey).map_err(|e| e.to_string())?;
+        let vue = base.read_entry(&vue_key).map_err(|e| e.to_string())?;
+        let refs: Vec<(&[u8], &[u8])> = ovs
+            .iter()
+            .map(|o| (o.ua.as_slice(), o.ue.as_slice()))
+            .collect();
+        match modman_core::combine::merge_datatable_overrides((&vua, &vue), &refs) {
+            Ok(Some(c)) => {
+                for w in &c.warnings {
+                    eprintln!("  Warning [{target}]: {w}");
+                }
+                println!(
+                    "  Merged {} override(s) into {}",
+                    ovs.len(),
+                    target.split('/').next_back().unwrap_or(target)
+                );
+                files.insert(vkey, c.uasset);
+                files.insert(vue_key, c.uexp);
+                merged += 1;
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("  Warning: could not merge {target}: {e}"),
+        }
+    }
+    for (path, (_, bytes)) in &passthrough {
+        files.insert(path.clone(), bytes.clone());
+    }
+    for c in &conflicts {
+        eprintln!(
+            "  Warning: '{c}' is overridden by multiple mods — only the last version is kept \
+             (this file type cannot be combined)"
+        );
+    }
+
+    if files.is_empty() {
+        return Err("nothing to combine (no conflicting overrides found)".to_string());
+    }
+    let staging = out_dir.join("staging");
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+    for (key, bytes) in &files {
+        let out_path = staging.join(key);
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&out_path, bytes).map_err(|e| e.to_string())?;
+    }
+    let pak_out = out_dir.join("SicarioCombine_P.pak");
+    modman_pak::pack(
+        &staging,
+        &pak_out,
+        modman_pak::Version::V3,
+        "../../../".to_string(),
+        None,
+    )
+    .map_err(|e| format!("Pack error: {e}"))?;
+    println!(
+        "\nWrote {} ({} datatable(s) merged, {} file(s) total, {} pass-through conflict warning(s))",
+        pak_out.display(),
+        merged,
+        files.len(),
+        conflicts.len()
+    );
+    Ok(())
 }
 
 /// Build a merged mod pak: load every target (plus `.uexp`/`.uasset`
