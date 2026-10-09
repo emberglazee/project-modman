@@ -158,8 +158,16 @@ pub fn merge_datatable_overrides(
         for r in &dt.rows {
             let src = &ue[r.start..r.end];
             let vanilla_row = vdt.rows.iter().find(|vr| vr.name == r.name);
+            // A row needs processing when its bytes differ OR when any of its
+            // refs point at imports the mod replaced (bytes identical, but
+            // the refs must be remapped — the F59-skins case at row level).
             let changed = match vanilla_row {
-                Some(vr) => &vue[vr.start..vr.end] != src,
+                Some(vr) => {
+                    &vue[vr.start..vr.end] != src
+                        || r.props
+                            .iter()
+                            .any(|p| prop_has_moved_refs(p, &import_maps[m]))
+                }
                 None => true,
             };
             if !changed {
@@ -190,11 +198,13 @@ pub fn merge_datatable_overrides(
                 let repr = crate::resolver::prop_value_string(&p.value).unwrap_or_default();
                 let pi = r.props.iter().position(|x| x.name == p.name).unwrap_or(0);
                 let extent_end = prop_extent_end(&r.props, pi, r.end);
+                let imp_map_ref = &import_maps[m];
                 let unchanged = vanilla_row.is_some_and(|vr| {
                     match vr.props.iter().position(|vp| vp.name == p.name) {
                         Some(vi) => {
                             let ve = prop_extent_end(&vr.props, vi, vr.end);
                             vue[vr.props[vi].start..ve] == ue[p.start..extent_end]
+                                && !prop_has_moved_refs(p, imp_map_ref)
                         }
                         None => false, // prop is new in this mod
                     }
@@ -317,10 +327,12 @@ pub fn merge_datatable_overrides(
             }
         }
         let outer = i32::from_le_bytes(e[16..20].try_into().unwrap());
-        if outer <= -(vimp as i32) {
+        if outer < 0 {
             let idx = (-outer) as usize - 1;
             if let Some(&new) = imp_map.get(idx) {
-                e[16..20].copy_from_slice(&(-(new + 1)).to_le_bytes());
+                if new != idx as i32 {
+                    e[16..20].copy_from_slice(&(-(new + 1)).to_le_bytes());
+                }
             }
         }
         link_append.push(modman_uasset::rewrite::NewLink {
@@ -348,6 +360,35 @@ pub fn merge_datatable_overrides(
         warnings,
         conflicts,
     }))
+}
+
+/// Does this prop reference imports whose merged position moved? A prop's
+/// bytes can be identical to vanilla while its refs point at a REPLACED
+/// import (the F59 skins) — such props must be applied so the refs remap.
+fn prop_has_moved_refs(p: &Prop, imp_map: &[i32]) -> bool {
+    let moved = |v: i32| -> bool {
+        if v < 0 {
+            let idx = (-v) as usize - 1;
+            imp_map.get(idx).is_some_and(|&new| new != idx as i32)
+        } else {
+            false
+        }
+    };
+    match &p.value {
+        PropValue::Object(v) => moved(*v),
+        PropValue::Struct { children } => children.iter().any(|c| prop_has_moved_refs(c, imp_map)),
+        PropValue::Array { items, .. } => items.iter().any(|it| match it {
+            modman_uasset::walk::ArrayElem::Struct(props) => {
+                props.iter().any(|c| prop_has_moved_refs(c, imp_map))
+            }
+            modman_uasset::walk::ArrayElem::Prim {
+                value: PropValue::Object(v),
+                ..
+            } => moved(*v),
+            _ => false,
+        }),
+        _ => false,
+    }
 }
 
 /// The full byte extent of a prop within its row: from the tag start to the
@@ -394,23 +435,26 @@ fn remap_prop_copy(
     out
 }
 
-/// Remap a package index (negative = import reference): refs beyond the
-/// vanilla import table map into the merged table's appended entries.
+/// Remap a package index (negative = import reference). Mods can REPLACE
+/// entries in range (the F59 skins swap a texture import), so any entry
+/// whose mapped position moved must be remapped — not just out-of-range
+/// refs, which would otherwise silently resolve to the vanilla entry.
 fn patch_pkg_ref(
     out: &mut [u8],
     off: usize,
     v: i32,
-    vimp: usize,
+    _vimp: usize,
     imp_map: &[i32],
     warnings: &mut Vec<String>,
 ) {
-    if v <= -(vimp as i32) {
+    if v < 0 {
         let idx = (-v) as usize - 1;
         match imp_map.get(idx) {
-            Some(&new) => {
+            Some(&new) if new != idx as i32 => {
                 let new_ref = -(new + 1);
                 out[off..off + 4].copy_from_slice(&new_ref.to_le_bytes());
             }
+            Some(_) => {} // entry unchanged — ref stays
             None => warnings.push(format!("package ref {v} beyond the import table")),
         }
     }
@@ -638,79 +682,101 @@ mod tests {
         );
     }
 
-    /// A mod that REPLACES an import entry in place (not just appends) must
-    /// merge: the replaced entry is carried as a new import and uexp refs
-    /// into it remap to the appended position (the F59-skins case).
+    /// A mod that REPLACES an import entry in place (the F59-skins case)
+    /// must merge with SEMANTIC ref preservation: every ref that pointed at
+    /// the replaced entry must resolve to the same object name in the
+    /// output (via the appended position), not to the vanilla entry.
     #[test]
-    fn replaced_import_entry_is_carried() {
+    fn replaced_import_refs_resolve_semantically() {
         let vua = fixture("DB_Aircraft.uasset");
         let vue = fixture("DB_Aircraft.uexp");
         let mua = fixture("DB_Aircraft.skin.merged.uasset");
         let mue = fixture("DB_Aircraft.skin.merged.uexp");
 
-        // Point one existing import entry at a different (valid) name index,
-        // simulating a mod that swaps an asset reference in place.
+        // Resolve an import ref to its ObjectName string.
+        fn oname(ua: &[u8], names: &[String], r: i32) -> Option<String> {
+            if r >= 0 {
+                return None;
+            }
+            let idx = (-r) as usize - 1;
+            let mimp = i32::from_le_bytes(ua[65..69].try_into().unwrap()) as usize;
+            if idx >= mimp {
+                return None;
+            }
+            let off = i32::from_le_bytes(ua[69..73].try_into().unwrap()) as usize + idx * 28;
+            let nidx = i32::from_le_bytes(ua[off + 20..off + 24].try_into().unwrap());
+            names.get(nidx.max(0) as usize).cloned()
+        }
+
+        // Find the first in-range object ref in the mod's uexp.
+        let dt = DataTable::walk_bytes(&mua, &mue).unwrap();
+        fn find_ref(p: &Prop) -> Option<i32> {
+            match &p.value {
+                PropValue::Object(v) if *v < 0 => Some(*v),
+                PropValue::Struct { children } => children.iter().find_map(find_ref),
+                PropValue::Array { items, .. } => items.iter().find_map(|it| match it {
+                    modman_uasset::walk::ArrayElem::Struct(props) => {
+                        props.iter().find_map(find_ref)
+                    }
+                    modman_uasset::walk::ArrayElem::Prim {
+                        value: PropValue::Object(v),
+                        ..
+                    } if *v < 0 => Some(*v),
+                    _ => None,
+                }),
+                _ => None,
+            }
+        }
+        let (ri, pi, first_ref) = dt
+            .rows
+            .iter()
+            .enumerate()
+            .find_map(|(ri, row)| {
+                row.props
+                    .iter()
+                    .enumerate()
+                    .find_map(|(pi, p)| find_ref(p).map(|r| (ri, pi, r)))
+            })
+            .expect("fixture must contain an object ref");
+        let anchor_row = dt.rows[ri].name.clone();
+        let anchor_prop = dt.rows[ri].props[pi].name.clone();
+
+        // Patch that import entry to a different valid ObjectName index.
         let mut patched = mua.clone();
         let imp_off = i32::from_le_bytes(patched[69..73].try_into().unwrap()) as usize;
+        let idx = (-first_ref) as usize - 1;
         let names_count = i32::from_le_bytes(patched[41..45].try_into().unwrap());
-        let old = i32::from_le_bytes(patched[imp_off + 20..imp_off + 24].try_into().unwrap());
+        let old = i32::from_le_bytes(
+            patched[imp_off + idx * 28 + 20..imp_off + idx * 28 + 24]
+                .try_into()
+                .unwrap(),
+        );
         let new = if old == 0 { 1 } else { 0 };
         assert!(new < names_count);
-        patched[imp_off + 20..imp_off + 24].copy_from_slice(&new.to_le_bytes());
+        patched[imp_off + idx * 28 + 20..imp_off + idx * 28 + 24]
+            .copy_from_slice(&new.to_le_bytes());
 
         let out =
             merge_datatable_overrides((&vua, &vue), &[(&patched, &mue)], &["swap".to_string()])
                 .unwrap()
                 .expect("merge");
 
-        // The swapped entry must exist in the merged import table, and all
-        // package refs in the output must resolve.
-        let mimp = i32::from_le_bytes(out.uasset[65..69].try_into().unwrap()) as usize;
-        let m_off = i32::from_le_bytes(out.uasset[69..73].try_into().unwrap()) as usize;
-        let swapped = (0..mimp).any(|i| {
-            i32::from_le_bytes(
-                out.uasset[m_off + i * 28 + 20..m_off + i * 28 + 24]
-                    .try_into()
-                    .unwrap(),
-            ) == new
-        });
-        assert!(
-            swapped,
-            "swapped import entry must be carried into the merged table"
-        );
-
-        let dt = DataTable::walk_bytes(&out.uasset, &out.uexp).unwrap();
-        fn check(p: &Prop, mimp: usize, bad: &mut usize) {
-            match &p.value {
-                PropValue::Object(v) => {
-                    if *v < -(mimp as i32) {
-                        *bad += 1;
-                    }
-                }
-                PropValue::Struct { children } => {
-                    for c in children {
-                        check(c, mimp, bad);
-                    }
-                }
-                PropValue::Array { items, .. } => {
-                    for it in items {
-                        if let modman_uasset::walk::ArrayElem::Struct(props) = it {
-                            for c in props {
-                                check(c, mimp, bad);
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        let mut bad = 0usize;
-        for r in &dt.rows {
-            for p in &r.props {
-                check(p, mimp, &mut bad);
-            }
-        }
-        assert_eq!(bad, 0, "no out-of-range package refs after the merge");
+        // The ref must resolve to the same (patched) ObjectName in the output.
+        let odt = DataTable::walk_bytes(&out.uasset, &out.uexp).unwrap();
+        let orow = odt
+            .rows
+            .iter()
+            .find(|r| r.name == anchor_row)
+            .expect("anchor row in output");
+        let oprop = orow
+            .props
+            .iter()
+            .find(|p| p.name == anchor_prop)
+            .expect("anchor prop in output");
+        let out_ref = find_ref(oprop).expect("output must contain the ref");
+        let expect = oname(&patched, &dt.names, first_ref).expect("mod ref resolves");
+        let got = oname(&out.uasset, &odt.names, out_ref).expect("output ref resolves");
+        assert_eq!(got, expect, "ref must resolve to the same object name");
     }
 
     /// A single override must reproduce the mod's datatable content exactly:
