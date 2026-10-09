@@ -6,9 +6,11 @@
 
 pub mod edit;
 pub mod export;
+pub mod hash;
 pub mod header;
 pub mod names;
 pub mod properties;
+pub mod rewrite;
 pub mod walk;
 
 use std::io::Read;
