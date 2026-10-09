@@ -295,7 +295,8 @@ fn parse_object_ref(value: &str) -> Result<PatchOp, PatchParseError> {
     let value = value.trim();
     if let Some(colon_pos) = value.find("':'") {
         let obj_name = value[1..colon_pos].to_string();
-        let obj_path = value[colon_pos + 2..].trim_end_matches('\'').to_string();
+        // Skip past the closing quote, colon and opening quote of the path.
+        let obj_path = value[colon_pos + 3..].trim_end_matches('\'').to_string();
         Ok(PatchOp::ObjectRef {
             object_name: obj_name,
             object_path: obj_path,
@@ -478,7 +479,10 @@ mod tests {
                 object_path,
             } => {
                 assert_eq!(object_name, "F16Custom_01");
-                assert!(object_path.contains("F16Custom_01"));
+                assert_eq!(
+                    object_path,
+                    "/Game/Assets/Objects/Aircraft/F16C/Textures/Skin/F16Custom_01"
+                );
             }
             _ => panic!("wrong variant"),
         }

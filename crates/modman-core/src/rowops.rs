@@ -110,6 +110,9 @@ pub fn apply_length_changing(
                 }
             }
         }
+        if p.patch_type.eq_ignore_ascii_case("objectRef") {
+            continue; // handled by the dedicated objectref pass
+        }
         let nodes = resolve(dt, &fragments);
         let op = parse_patch_value(&p.patch_type, &p.value)
             .map_err(|e| ApplyError::Value(e.to_string()))?;
@@ -458,6 +461,7 @@ mod tests {
             &uasset,
             &modman_uasset::rewrite::RewritePlan {
                 name_append: result.name_append.clone(),
+                link_append: vec![],
                 uexp_delta: result.uexp_delta,
             },
         )
@@ -568,6 +572,7 @@ mod tests {
             &uasset,
             &modman_uasset::rewrite::RewritePlan {
                 name_append: result.name_append.clone(),
+                link_append: vec![],
                 uexp_delta: result.uexp_delta,
             },
         )

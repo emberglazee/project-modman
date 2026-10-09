@@ -14,6 +14,7 @@ pub mod fragment;
 pub mod hexpatch;
 pub mod manifest;
 pub mod merge;
+pub mod objectref;
 pub mod patch;
 pub mod resolver;
 pub mod rowops;

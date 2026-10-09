@@ -51,6 +51,10 @@ pub fn plan_same_size_edits(
     };
     for set in sets {
         for patch in &set.patches {
+            // objectRef patches are handled by the dedicated objectref pass.
+            if patch.patch_type.eq_ignore_ascii_case("objectRef") {
+                continue;
+            }
             plan_patch(dt, patch, &mut out)?;
         }
     }

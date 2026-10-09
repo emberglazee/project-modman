@@ -295,10 +295,14 @@ fn main() {
                     }
 
                     // Provider order (also the report order):
-                    // embeddedPresets, sicarioRequests, loosePresets.
+                    // embeddedPresets, sicarioRequests, loosePresets, customSkins.
                     let mut components: Vec<comps::MergeComponent> = Vec::new();
                     components.append(&mut embedded);
                     components.push(loose_comp);
+                    let (skin_comp, _skin_warnings) = comps::skin_component(&game_paks);
+                    if let Some(sc) = skin_comp {
+                        components.push(sc);
+                    }
                     for c in &components {
                         println!("  {}", c.message);
                     }

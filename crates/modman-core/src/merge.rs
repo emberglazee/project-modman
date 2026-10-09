@@ -84,8 +84,20 @@ pub fn merge_mods(
     let mut uasset = vanilla_uasset.to_vec();
     let mut uexp = vanilla_uexp.to_vec();
     for modm in mods {
-        let dt =
+        let mut dt =
             DataTable::walk_bytes(&uasset, &uexp).map_err(|e| ApplyError::Asset(e.to_string()))?;
+        // objectRef patches (array-append form) apply first: they append
+        // import entries + name-table entries and add array elements.
+        if crate::objectref::has_object_refs(modm, target) {
+            if let Some(edits) =
+                crate::objectref::apply_object_refs(&dt, &uasset, &uexp, modm, target)?
+            {
+                uasset = edits.uasset;
+                uexp = edits.uexp;
+                dt = DataTable::walk_bytes(&uasset, &uexp)
+                    .map_err(|e| ApplyError::Asset(e.to_string()))?;
+            }
+        }
         // Same-size path first; anything that doesn't fit falls back to the
         // length-changing machinery (which also handles pure in-place edits).
         match apply::plan_same_size_edits(&dt, modm, target) {
@@ -99,6 +111,7 @@ pub fn merge_mods(
                         &uasset,
                         &modman_uasset::rewrite::RewritePlan {
                             name_append: res.name_append,
+                            link_append: vec![],
                             uexp_delta: res.uexp_delta,
                         },
                     )
@@ -349,6 +362,46 @@ mod tests {
         assert_eq!(
             case.uasset, case.oracle_uasset,
             "damage-path uasset differs from oracle"
+        );
+    }
+
+    /// objectRef / customSkins parity: the C# `SkinSlotLoader` synthesizes an
+    /// objectRef mod appending a new skin texture reference to the
+    /// `SkinLibraryLegacy` array; we reproduce the oracle skin-merge output
+    /// byte-exactly (new imports, names, and the appended array element).
+    #[test]
+    fn skin_merge_matches_oracle() {
+        let (ua, ue) = pair();
+        let json = r#"{
+            "_id": "skinSlots",
+            "assetPatches": {
+                "ProjectWingman/Content/ProjectWingman/Blueprints/Data/AircraftData/DB_Aircraft.uexp": [{
+                    "name": "Add 1 F-15C",
+                    "patches": [{
+                        "type": "objectRef",
+                        "template": "datatable:['F-15C'].{'SkinLibraryLegacy*'}",
+                        "value": "'testskin':'/Game/Assets/Skins/F-15C/testskin'"
+                    }]
+                }]
+            }
+        }"#;
+        let modm = crate::manifest::parse_mod_json(json).unwrap();
+        let out = merge_mods(&ua, &ue, &[&modm], TARGET).unwrap();
+
+        let oracle_uasset = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../modman-uasset/tests/fixtures/DB_Aircraft.skin.merged.uasset"
+        ))
+        .unwrap();
+        let oracle_uexp = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../modman-uasset/tests/fixtures/DB_Aircraft.skin.merged.uexp"
+        ))
+        .unwrap();
+        assert_eq!(out.uexp, oracle_uexp, "skin-merge uexp differs from oracle");
+        assert_eq!(
+            out.uasset, oracle_uasset,
+            "skin-merge uasset differs from oracle"
         );
     }
 }

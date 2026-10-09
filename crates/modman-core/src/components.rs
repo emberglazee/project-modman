@@ -209,6 +209,128 @@ pub fn embedded_components(scan: &ScanReport, engine: &str) -> (Vec<MergeCompone
     (vec![embedded_presets, sicario_requests], warnings)
 }
 
+/// The `customSkins` component — ports the C# `SkinSlotLoader` +
+/// `SkinMergeProvider`: scans `*_P.pak` files for records under
+/// `ProjectWingman/Content/Assets/Skins`, groups them by the directory name
+/// (the aircraft row), and synthesizes an `objectRef` mod appending each skin
+/// texture to that row's `SkinLibraryLegacy` array.
+///
+/// Returns `None` when no skin records are found.
+pub fn skin_component(paks_dir: &Path) -> (Option<MergeComponent>, Vec<String>) {
+    let mut paks: Vec<PathBuf> = Vec::new();
+    collect_skin_paks(paks_dir, &mut paks);
+    paks.sort();
+
+    // dir name -> full record paths (order-preserving grouping).
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for pak in &paks {
+        let Ok(archive) = modman_pak::PakArchive::open(pak) else {
+            continue;
+        };
+        for record in archive.files() {
+            let norm = record.replace('\\', "/");
+            if !norm.starts_with("ProjectWingman/Content/Assets/Skins") {
+                continue;
+            }
+            let dir = std::path::Path::new(&norm)
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            match groups.iter_mut().find(|(d, _)| *d == dir) {
+                Some((_, paths)) => paths.push(norm),
+                None => groups.push((dir, vec![norm])),
+            }
+        }
+    }
+    if groups.is_empty() {
+        return (None, Vec::new());
+    }
+
+    let mut sets: Vec<crate::manifest::PatchSet> = Vec::new();
+    let mut resources: BTreeMap<String, String> = BTreeMap::new();
+    let mut patch_count = 0usize;
+    for (aircraft, paths) in &groups {
+        let asset_paths: Vec<&String> = paths
+            .iter()
+            .filter(|p| p.to_ascii_lowercase().ends_with(".uasset"))
+            .collect();
+        let patches: Vec<crate::manifest::Patch> = asset_paths
+            .iter()
+            .map(|p| {
+                let stem = std::path::Path::new(p)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let trimmed = match p.split_once("Assets/") {
+                    Some((_, rest)) => format!("Assets/{}", rest.trim_end_matches(".uasset")),
+                    None => p.to_string(),
+                };
+                crate::manifest::Patch {
+                    description: String::new(),
+                    version: None,
+                    template: format!("datatable:['{aircraft}'].{{'SkinLibraryLegacy*'}}"),
+                    value: format!("'{stem}':'/Game/{trimmed}'"),
+                    patch_type: "objectRef".to_string(),
+                }
+            })
+            .collect();
+        patch_count += patches.len();
+        sets.push(crate::manifest::PatchSet {
+            name: format!("Add {} {}", asset_paths.len(), aircraft),
+            patches,
+        });
+        resources.insert(
+            aircraft.clone(),
+            paths
+                .iter()
+                .map(|p| p.trim_end_matches(".uasset").to_string())
+                .collect::<Vec<_>>()
+                .join(";"),
+        );
+    }
+
+    let mut modm = WingmanMod {
+        id: "skinSlots".to_string(),
+        ..Default::default()
+    };
+    modm.asset_patches.insert(
+        "ProjectWingman/Content/ProjectWingman/Blueprints/Data/AircraftData/DB_Aircraft.uexp"
+            .to_string(),
+        sets,
+    );
+
+    (
+        Some(MergeComponent {
+            name: "customSkins",
+            priority: 0,
+            mods: vec![modm],
+            params: Vars::new(),
+            resources,
+            message: format!("Successfully compiled skin merge with {patch_count} patches."),
+        }),
+        Vec::new(),
+    )
+}
+
+fn collect_skin_paks(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_skin_paks(&path, out);
+        } else if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.to_ascii_lowercase().ends_with("_p.pak"))
+        {
+            out.push(path);
+        }
+    }
+}
+
 /// `MergeExtensions.GetMods`: ascending priority, concatenated.
 pub fn ordered_mods(components: &[MergeComponent]) -> Vec<&WingmanMod> {
     let mut sorted: Vec<&MergeComponent> = components.iter().collect();

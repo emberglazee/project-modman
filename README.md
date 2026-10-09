@@ -36,15 +36,15 @@ Verified against the C# merger at byte level (oracle harness in `~/modding/proje
 |---|---|
 | DataTable patches (propertyValue, modify, array, text, duplicate*, delete) | ✅ byte-exact (uassets identical; uexps modulo random FText keys) |
 | `filePatches` hex engine (all types, windows, filters, length fix-up) | ✅ byte-exact, including the destructive absent-`value` path |
+| `objectRef` (import-table writes) + `customSkins` PSM slot merging | ✅ byte-exact (oracle-verified skin merge) |
 | Multi-mod merge order + conflict semantics | ✅ oracle-verified |
 | Components, parameters/inputs, engine-version gate, `GetLabel` | ✅ |
 | Merge report (`--report`) | ✅ byte-identical |
 | `preset-pack` | ✅ byte-identical output pak |
 | In-game acceptance | ✅ (user-verified) |
 
-### Known gap
-
-- **`customSkins` (legacy PSM skin-slot merging) and `objectRef` application.** The loader synthesizes an `objectRef` mod from installed `*_P.pak` skins (see `SkinSlotLoader`): it appends object references to `SkinLibraryLegacy` arrays and adds new **import entries** (FObjectImport) plus name-table additions to `DB_Aircraft.uasset`. Our `objectRef` patch type parses but is not yet applied; implementing it requires UE4 import-table writing (the same machinery a fuller UAssetAPI writer port would provide). Modern PNG-pipeline skins (2.x) do not need this merge.
+**All known v1 parity gaps are closed.** `customSkins` skin-slot merging works with real
+PSM skin paks (`ProjectWingman/Content/Assets/Skins/<aircraft-row>/…`).
 
 ## Building
 
