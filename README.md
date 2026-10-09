@@ -13,6 +13,7 @@
 - **HexPatch engine** (`filePatches`) with the C# stream-walk semantics and the `.uexp` length auto-correct
 - **Merge pipeline**: component model (embeddedPresets → loosePresets → sicarioRequests), engine-major phases, `.uexp`/`.uasset` sidecar handling
 - **`build`** writes a real merged `SicarioMerge_P.pak`; **`preset-pack`** builds standalone preset packs with the preset embedded at `Content/sicario/`; **`--report`** writes the C#-identical merge report
+- **`combine`** merges conflicting override mods that carry **no Sicario metadata** (the common case for 2024+ mods) — three-way, field-level, with a full conflict report
 
 In-game acceptance passed (SPEAR Unlock + Improved Chimera verified in Project Wingman 2.1.1A).
 
@@ -50,6 +51,30 @@ PSM skin paks (`ProjectWingman/Content/Assets/Skins/<aircraft-row>/…`), live-v
 
 - **Self-contained merges** (default): the merged pak embeds detected skin files, so one pak
   installs everything (`--no-embed-skins` restores the strict C# output).
+- **No-metadata merging** (`combine`): three-way, field-level datatable merging for plain
+  override mods, with import carrying and conflict reports.
+- **End-of-merge reports** for both `build` and `combine`: merge order, field-level
+  conflicts (which mod overwrote which value), and warnings.
+
+## Merging mods without metadata (`combine`)
+
+Project Sicario's merge metadata (`.dtp` presets, embedded requests) was never updated for
+Project Wingman 2.0 / UE 4.27, so most 2024+ mods are plain file overrides — and when two
+of them edit the same uasset, the game loads only one. `modman combine` merges them anyway:
+
+```bash
+modman combine <pak-or-dir...> --install-path <game> --output <dir>
+```
+
+- DataTables are merged **three-way** (vanilla + each mod's delta, later mods win) at
+  **field level** — different fields of the same row all survive; genuine same-field
+  clashes resolve later-wins and are reported.
+- Mods that add object references (textures, materials) keep working: import-table
+  entries are carried with all FName and package-index references remapped.
+- Non-datatable files (maps, models, textures) pass through single-winner, with a warning
+  when two mods fight over one — those file types genuinely cannot be combined.
+- Every run ends with a **merge report**: the order, every conflict (with mod names and
+  values), and warnings.
 
 ## Building
 
@@ -77,6 +102,9 @@ modman build <paths...> --install-path <game> --output <dir> --report merge-repo
 
 # Build standalone preset packs (preset embedded at Content/sicario/)
 modman preset-pack <preset.dtp...> -n MyPack --install-path <game>
+
+# Merge conflicting override mods — no metadata required
+modman combine <pak-or-dir...> --install-path <game> --output <dir>
 ```
 
 ## Project Structure
