@@ -194,3 +194,53 @@ fn direct_mod_parse_matches_preset_embedded_mod() {
     assert_eq!(direct.patch_count(), p.mods[0].patch_count());
     assert_eq!(direct.label(), p.mods[0].label());
 }
+
+#[test]
+fn all_corpus_templates_parse() {
+    let Some(root) = corpus_dir() else {
+        return;
+    };
+    let mut mods = Vec::new();
+    for ext in ["dtp", "json"] {
+        for path in collect(&root, ext) {
+            let Ok(raw) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if let Ok(p) = parse_preset_json(&raw) {
+                mods.extend(p.mods);
+                continue;
+            }
+            if let Ok(r) = parse_meta_request_json(&raw) {
+                mods.extend(r.request.mods);
+            }
+        }
+    }
+    assert!(!mods.is_empty());
+
+    // Also include mods embedded in corpus paks (presets + build requests).
+    let report = modman_core::discovery::scan_paks_dir(&root);
+    for c in report.components {
+        mods.extend(c.mods);
+    }
+
+    let mut count = 0usize;
+    for m in &mods {
+        for sets in m.asset_patches.values() {
+            for set in sets {
+                for patch in &set.patches {
+                    let ctx = modman_core::fragment::parse_template(&patch.template)
+                        .unwrap_or_else(|e| {
+                            panic!("template failed to parse: `{}` ({e})", patch.template)
+                        });
+                    assert!(
+                        !ctx.fragments.is_empty(),
+                        "no fragments parsed: `{}`",
+                        patch.template
+                    );
+                    count += 1;
+                }
+            }
+        }
+    }
+    assert!(count >= 80, "expected many templates, got {count}");
+}

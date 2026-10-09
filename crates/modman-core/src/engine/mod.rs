@@ -89,27 +89,27 @@ pub fn match_fragments<'a>(
 
 fn apply_fragment<'a>(input: &[&'a Property], fragment: &Fragment) -> Vec<&'a Property> {
     match fragment {
-        Fragment::StructName { name, invert } => {
-            let pattern = name.trim_end_matches('*');
-            let is_wildcard = name.ends_with('*');
-            input
-                .iter()
-                .filter(|p| {
-                    let matches = if is_wildcard {
-                        p.name.starts_with(pattern)
-                    } else {
-                        p.name == *name
-                    };
-                    matches ^ invert
-                })
-                .copied()
-                .collect()
-        }
+        Fragment::StructName {
+            name,
+            invert,
+            partial,
+        } => input
+            .iter()
+            .filter(|p| {
+                let matches = if *partial {
+                    p.name.starts_with(name.as_str())
+                } else {
+                    p.name == *name
+                };
+                matches ^ invert
+            })
+            .copied()
+            .collect(),
         Fragment::ArrayIndex(index) => input.get(*index).map(|p| vec![*p]).unwrap_or_default(),
-        Fragment::StructProperty(name) => {
+        Fragment::StructProperty { name, partial } => {
             // Return children of struct properties matching the name
-            let pattern = name.trim_end_matches('*');
-            let is_wildcard = name.ends_with('*');
+            let pattern = name.as_str();
+            let is_wildcard = *partial;
             input
                 .iter()
                 .filter_map(|p| match &p.value {
@@ -142,6 +142,9 @@ fn apply_fragment<'a>(input: &[&'a Property], fragment: &Fragment) -> Vec<&'a Pr
                     if p.type_name != *prop_type {
                         return false;
                     }
+                    let Some(value) = value else {
+                        return true;
+                    };
                     // Match value
                     match &p.value {
                         PropertyValue::Int(v) => value.parse::<i32>().ok() == Some(*v),
@@ -276,6 +279,7 @@ mod tests {
             &[Fragment::StructName {
                 name: "F-15C".into(),
                 invert: false,
+                partial: false,
             }],
         );
         assert_eq!(matches.len(), 1);

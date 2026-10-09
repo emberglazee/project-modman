@@ -1,16 +1,33 @@
-//! Fragment DSL parser — translates Sicario template strings into executable fragments.
+//! Fragment DSL parser — faithful port of the C# SicarioPatch template grammar
+//! (`SicarioPatch.Engine/TemplateParser.cs` + `Templates/*TemplateProvider.cs`).
 //!
-//! Grammar:
-//!   template = type_loader ":" fragment_chain
-//!   type_loader = identifier ("(" parameter? ")")?
-//!   fragment_chain = fragment ("." fragment)*
+//! Grammar: `loader(param)? ':' fragment ('.' fragment)*`
+//!
+//! Fragment alternatives (priority order mirrors the C# parser chain — the
+//! struct providers are registered last and thus tried first, and within each
+//! provider the parsers are tried in reverse registration order):
+//!
+//! | syntax              | fragment                                        |
+//! |---------------------|-------------------------------------------------|
+//! | `{name}` / `{name*}`| `StructProperty` — descend into struct children |
+//! | `{Type:{Name=Val}}` | `StructMatch` — struct by type + child value    |
+//! | `['name']` / `['!name']` | `StructName` — name match (`*` partial, `!` invert) |
+//! | `<Type=A|B|C>`      | `NumberCollection` — numeric value set          |
+//! | `<Type=Value>`      | `PropertyValue` — value constraint (`*` wildcard) |
+//! | `<Type>`            | `PropertyType` — type filter                    |
+//! | `<Enum::Member>`    | `EnumValue` — byte-property enum member         |
+//! | `[[*]]`             | `ArrayFlatten` — flatten array items            |
+//! | `[[N]]`             | `ArrayPropertyIndex` — index into array items   |
+//! | `[N]`               | `ArrayIndex` — index into current set           |
+//! | `[*]`               | `Any` — pass-through                            |
+//! | `{**}`              | `Flatten` — descend into all structs            |
 
 /// The result of parsing a template string
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TemplateContext {
     /// The type loader to use (e.g., "datatable", "raw")
     pub loader: String,
-    /// Optional parameter passed to the loader (e.g., table name)
+    /// Optional parameter passed to the loader
     pub loader_param: Option<String>,
     /// The chain of fragments to apply
     pub fragments: Vec<Fragment>,
@@ -19,384 +36,793 @@ pub struct TemplateContext {
 /// A single fragment filter in the chain
 #[derive(Debug, Clone, PartialEq)]
 pub enum Fragment {
-    /// `['name']` — match properties by name (supports `*` wildcard, `!` invert)
-    StructName { name: String, invert: bool },
-    /// `[N]` — select Nth result from current set
-    ArrayIndex(usize),
-    /// `{name}` — descend into struct, return children matching name
-    StructProperty(String),
-    /// `{Type:{Name=Value}}` — descend into struct with child property match
+    /// `[*]` — match everything (pass-through)
+    Any,
+    /// `{**}` — descend into all structs' children
+    Flatten,
+    /// `['name']`, `['name*']`, `['!name']` — match properties by name.
+    /// `name` is stored without trailing `*`; `partial` enables prefix match.
+    StructName {
+        name: String,
+        invert: bool,
+        partial: bool,
+    },
+    /// `{name}`, `{name*}` — descend into struct children matching name.
+    StructProperty { name: String, partial: bool },
+    /// `{Type:{Name=Value}}` — match structs by type and child property value
     StructMatch {
         struct_type: Option<String>,
         prop_name: String,
         prop_value: String,
     },
-    /// `[[N]]` — select Nth entry from ArrayProperty
+    /// `[N]` — select Nth result from current set
+    ArrayIndex(usize),
+    /// `[[N]]` — select Nth entry from ArrayProperty items
     ArrayPropertyIndex(usize),
-    /// `[[*]]` — flatten array contents
+    /// `[[*]]` — flatten ArrayProperty items into the current set
     ArrayFlatten,
-    /// `<type>` — filter by property type
+    /// `<Type>` — filter by property type
     PropertyType(String),
-    /// `<type=value>` — filter by type and value
-    PropertyValue { prop_type: String, value: String },
-    /// `<type::value>` — filter enum by type and value
+    /// `<Type=Value>` — filter by type and value (`*` wildcard semantics)
+    PropertyValue {
+        prop_type: String,
+        value: Option<String>,
+    },
+    /// `<Type=A|B|C>` — filter by type and numeric value set
+    NumberCollection { prop_type: String, values: Vec<f64> },
+    /// `<Enum::Member>` / `<Enum::>` — filter byte properties by enum member
     EnumValue {
         enum_type: String,
-        enum_value: String,
+        value: Option<String>,
     },
-    /// `[*]` — match everything
-    Any,
-    /// `{**}` — flatten nested structures
-    Flatten,
 }
 
 /// Errors from parsing the fragment DSL
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
-    #[error("Unexpected end of input")]
+    #[error("unexpected end of input")]
     UnexpectedEnd,
-    #[error("Expected '{0}' at position {1}")]
+    #[error("expected '{0}' at position {1}")]
     Expected(char, usize),
-    #[error("Unknown fragment syntax at position {0}: `{1}`")]
-    UnknownSyntax(usize, String),
-    #[error("Invalid type loader at position {0}: `{1}`")]
-    InvalidLoader(usize, String),
+    #[error("expected a fragment at position {0}: `{1}`")]
+    UnknownFragment(usize, String),
+    #[error("expected a type loader prefix (e.g. `datatable:`)")]
+    MissingLoader,
 }
 
-/// Parse a complete template string into a TemplateContext
+/// Parse a complete template string into its context and fragment chain.
 pub fn parse_template(input: &str) -> Result<TemplateContext, ParseError> {
-    let chars: Vec<char> = input.chars().collect();
-    let mut pos = 0;
+    let mut p = Parser::new(input);
 
-    // Parse type loader: identifier ("(" param? ")")?
-    let loader = parse_identifier(&chars, &mut pos)?;
-    let loader_param = if pos < chars.len() && chars[pos] == '(' {
-        pos += 1; // skip '('
-        let param = parse_string_or_ident(&chars, &mut pos)?;
-        expect_char(&chars, &mut pos, ')')?;
-        Some(param)
-    } else {
-        None
-    };
+    // Type loader: identifier, optionally with a `(param)` argument.
+    let loader = p.identifier().ok_or(ParseError::MissingLoader)?;
+    p.skip_ws();
+    let mut loader_param = None;
+    if p.eat('(') {
+        p.skip_ws();
+        let param = p
+            .quoted()
+            .or_else(|| p.identifier())
+            .ok_or(ParseError::Expected(')', p.pos))?;
+        p.skip_ws();
+        p.expect(')')?;
+        loader_param = Some(param);
+    }
+    p.skip_ws();
+    p.expect(':')?;
 
-    // Expect ':'
-    expect_char(&chars, &mut pos, ':')?;
-
-    // Parse fragment chain
     let mut fragments = Vec::new();
-    if pos < chars.len() {
-        fragments.push(parse_fragment(&chars, &mut pos)?);
-        while pos < chars.len() && chars[pos] == '.' {
-            pos += 1; // skip '.'
-            if pos < chars.len() {
-                fragments.push(parse_fragment(&chars, &mut pos)?);
-            }
+    loop {
+        let fragment = p
+            .fragment()
+            .ok_or_else(|| ParseError::UnknownFragment(p.pos, p.snippet()))?;
+        fragments.push(fragment);
+        p.skip_ws();
+        if !p.eat('.') {
+            break;
         }
     }
-
+    p.skip_ws();
+    if p.pos < p.chars.len() {
+        return Err(ParseError::UnknownFragment(p.pos, p.snippet()));
+    }
     Ok(TemplateContext {
-        loader: loader.to_lowercase(),
+        loader,
         loader_param,
         fragments,
     })
 }
 
-fn parse_fragment(chars: &[char], pos: &mut usize) -> Result<Fragment, ParseError> {
-    if *pos >= chars.len() {
-        return Err(ParseError::UnexpectedEnd);
+struct Parser {
+    chars: Vec<char>,
+    pos: usize,
+}
+
+type FragmentTry = fn(&mut Parser) -> Option<Fragment>;
+
+impl Parser {
+    fn new(input: &str) -> Self {
+        Self {
+            chars: input.chars().collect(),
+            pos: 0,
+        }
     }
 
-    match chars[*pos] {
-        '[' => {
-            *pos += 1;
-            if *pos >= chars.len() {
-                return Err(ParseError::UnexpectedEnd);
-            }
-            if chars[*pos] == '[' {
-                // [[N]] or [[*]]
-                *pos += 1;
-                if *pos < chars.len() && chars[*pos] == '*' {
-                    *pos += 1;
-                    expect_char(chars, pos, ']')?;
-                    expect_char(chars, pos, ']')?;
-                    Ok(Fragment::ArrayFlatten)
-                } else {
-                    let index = parse_number(chars, pos)?;
-                    expect_char(chars, pos, ']')?;
-                    expect_char(chars, pos, ']')?;
-                    Ok(Fragment::ArrayPropertyIndex(index))
-                }
-            } else if chars[*pos] == '*' {
-                // [*] — Any fragment
-                *pos += 1;
-                expect_char(chars, pos, ']')?;
-                Ok(Fragment::Any)
-            } else if chars[*pos] == '!' {
-                // [!name] — Inverted struct fragment
-                *pos += 1;
-                let name = parse_string_or_ident(chars, pos)?;
-                expect_char(chars, pos, ']')?;
-                Ok(Fragment::StructName { name, invert: true })
-            } else {
-                // [name] or [N]
-                let val = parse_string_or_ident(chars, pos)?;
-                expect_char(chars, pos, ']')?;
-                // Check if it's a number
-                if let Ok(n) = val.parse::<usize>() {
-                    Ok(Fragment::ArrayIndex(n))
-                } else {
-                    Ok(Fragment::StructName {
-                        name: val,
-                        invert: false,
-                    })
-                }
-            }
-        }
-        '{' => {
-            *pos += 1;
-            if *pos < chars.len()
-                && *pos + 1 < chars.len()
-                && chars[*pos] == '*'
-                && chars[*pos + 1] == '*'
-            {
-                // {**} — Flatten
-                *pos += 2;
-                expect_char(chars, pos, '}')?;
-                Ok(Fragment::Flatten)
-            } else if *pos < chars.len() && chars[*pos] == '*' {
-                // {*:{Name=Value}} — StructMatch with wildcard type
-                *pos += 1;
-                expect_char(chars, pos, ':')?;
-                expect_char(chars, pos, '{')?;
-                let prop_name = parse_string_or_ident(chars, pos)?;
-                expect_char(chars, pos, '=')?;
-                let prop_value = parse_string_or_ident(chars, pos)?;
-                expect_char(chars, pos, '}')?;
-                expect_char(chars, pos, '}')?;
-                Ok(Fragment::StructMatch {
-                    struct_type: None,
-                    prop_name,
-                    prop_value,
-                })
-            } else if *pos < chars.len() && chars[*pos] == ':' {
-                // {:? actually {Type:{...}}
-                // Find the opening { after the type
-                let struct_type = Some(parse_identifier(chars, pos)?);
-                expect_char(chars, pos, ':')?;
-                expect_char(chars, pos, '{')?;
-                let prop_name = parse_string_or_ident(chars, pos)?;
-                expect_char(chars, pos, '=')?;
-                let prop_value = parse_string_or_ident(chars, pos)?;
-                expect_char(chars, pos, '}')?;
-                expect_char(chars, pos, '}')?;
-                Ok(Fragment::StructMatch {
-                    struct_type,
-                    prop_name,
-                    prop_value,
-                })
-            } else {
-                // {name} — StructPropertyFragment
-                let name = parse_string_or_ident(chars, pos)?;
-                expect_char(chars, pos, '}')?;
-                Ok(Fragment::StructProperty(name))
-            }
-        }
-        '<' => {
-            *pos += 1;
-            let content = parse_until(chars, pos, '>')?;
-            expect_char(chars, pos, '>')?;
+    fn peek(&self) -> Option<char> {
+        self.chars.get(self.pos).copied()
+    }
 
-            // <type::enum_value> — EnumValue
-            if let Some(double_colon) = content.find("::") {
-                let enum_type = content[..double_colon].to_string();
-                let enum_value = content[double_colon + 2..].to_string();
-                Ok(Fragment::EnumValue {
-                    enum_type,
-                    enum_value,
-                })
+    fn eat(&mut self, c: char) -> bool {
+        if self.peek() == Some(c) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn expect(&mut self, c: char) -> Result<(), ParseError> {
+        if self.eat(c) {
+            Ok(())
+        } else {
+            Err(ParseError::Expected(c, self.pos))
+        }
+    }
+
+    /// Whitespace skip (Parlot `Terms.*` terminals skip whitespace).
+    fn skip_ws(&mut self) {
+        while self.peek().is_some_and(|c| c.is_whitespace()) {
+            self.pos += 1;
+        }
+    }
+
+    fn snippet(&self) -> String {
+        let start = self.pos.saturating_sub(20);
+        let end = (self.pos + 20).min(self.chars.len());
+        self.chars[start..end].iter().collect()
+    }
+
+    fn identifier(&mut self) -> Option<String> {
+        self.skip_ws();
+        let start = self.pos;
+        match self.peek() {
+            Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+                self.pos += 1;
             }
-            // <type=value> — PropertyValue
-            else if let Some(eq_pos) = content.find('=') {
-                let prop_type = content[..eq_pos].to_string();
-                let value = content[eq_pos + 1..].to_string();
-                // Strip single quotes from value
-                let value = value.trim_matches('\'').to_string();
-                Ok(Fragment::PropertyValue { prop_type, value })
+            _ => return None,
+        }
+        while self
+            .peek()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            self.pos += 1;
+        }
+        Some(self.chars[start..self.pos].iter().collect())
+    }
+
+    /// Quoted string (`'...'` or `"..."`, no escape handling — matching the
+    /// template corpus).
+    fn quoted(&mut self) -> Option<String> {
+        self.skip_ws();
+        let quote = match self.peek() {
+            Some(c @ ('\'' | '"')) => c,
+            _ => return None,
+        };
+        self.pos += 1;
+        let start = self.pos;
+        while let Some(c) = self.peek() {
+            if c == quote {
+                let s: String = self.chars[start..self.pos].iter().collect();
+                self.pos += 1;
+                return Some(s);
             }
-            // <type> — PropertyType
-            else {
-                Ok(Fragment::PropertyType(content.trim().to_string()))
+            self.pos += 1;
+        }
+        None
+    }
+
+    fn integer(&mut self) -> Option<i64> {
+        self.skip_ws();
+        let start = self.pos;
+        if self.peek() == Some('-') {
+            self.pos += 1;
+        }
+        let digits_start = self.pos;
+        while self.peek().is_some_and(|c| c.is_ascii_digit()) {
+            self.pos += 1;
+        }
+        if self.pos == digits_start {
+            self.pos = start;
+            return None;
+        }
+        self.chars[start..self.pos]
+            .iter()
+            .collect::<String>()
+            .parse()
+            .ok()
+    }
+
+    fn number(&mut self) -> Option<f64> {
+        self.skip_ws();
+        let int_part = self.integer()?;
+        let mut text = int_part.to_string();
+        if self.peek() == Some('.') {
+            let save = self.pos;
+            self.pos += 1;
+            let digits_start = self.pos;
+            while self.peek().is_some_and(|c| c.is_ascii_digit()) {
+                self.pos += 1;
+            }
+            if self.pos == digits_start {
+                self.pos = save;
+            } else {
+                text.push('.');
+                for c in &self.chars[digits_start..self.pos] {
+                    text.push(*c);
+                }
             }
         }
-        _ => Err(ParseError::UnknownSyntax(*pos, chars.iter().collect())),
+        text.parse().ok()
+    }
+
+    /// Parse one fragment, trying alternatives in the C# priority order.
+    fn fragment(&mut self) -> Option<Fragment> {
+        const ATTEMPTS: &[FragmentTry] = &[
+            try_struct_property,
+            try_struct_match,
+            try_struct_name,
+            try_number_collection,
+            try_property_value,
+            try_property_type,
+            try_enum_value,
+            try_array_flatten,
+            try_array_prop_index,
+            try_array_index,
+            try_defaults,
+        ];
+        let start = self.pos;
+        for attempt in ATTEMPTS {
+            self.pos = start;
+            if let Some(f) = attempt(self) {
+                return Some(f);
+            }
+        }
+        self.pos = start;
+        None
     }
 }
 
-// ---- Parser helpers ----
-
-fn parse_identifier(chars: &[char], pos: &mut usize) -> Result<String, ParseError> {
-    let start = *pos;
-    while *pos < chars.len() && (chars[*pos].is_alphanumeric() || chars[*pos] == '_') {
-        *pos += 1;
+/// `{name}` / `{name*}` → StructProperty
+fn try_struct_property(p: &mut Parser) -> Option<Fragment> {
+    if !p.eat('{') {
+        return None;
     }
-    if *pos == start {
-        return Err(ParseError::InvalidLoader(*pos, chars.iter().collect()));
+    let name = p.quoted()?;
+    p.skip_ws();
+    if !p.eat('}') {
+        return None;
     }
-    Ok(chars[start..*pos].iter().collect())
+    let partial = name.ends_with('*');
+    Some(Fragment::StructProperty {
+        name: name.trim_end_matches('*').to_string(),
+        partial,
+    })
 }
 
-fn parse_string_or_ident(chars: &[char], pos: &mut usize) -> Result<String, ParseError> {
-    if *pos >= chars.len() {
-        return Err(ParseError::UnexpectedEnd);
+/// `{Type:{Name=Value}}` / `{{Name=Value}}` → StructMatch
+fn try_struct_match(p: &mut Parser) -> Option<Fragment> {
+    if !p.eat('{') {
+        return None;
     }
-    if chars[*pos] == '\'' {
-        *pos += 1;
-        let start = *pos;
-        while *pos < chars.len() && chars[*pos] != '\'' {
-            *pos += 1;
+    let struct_type = p.identifier();
+    p.skip_ws();
+    if struct_type.is_some() && !p.eat(':') {
+        return None;
+    }
+    if !p.eat('{') {
+        return None;
+    }
+    let prop_name = p.quoted()?;
+    p.skip_ws();
+    if !p.eat('=') {
+        return None;
+    }
+    let prop_value = p.quoted()?;
+    p.skip_ws();
+    if !p.eat('}') {
+        return None;
+    }
+    p.skip_ws();
+    if !p.eat('}') {
+        return None;
+    }
+    Some(Fragment::StructMatch {
+        struct_type,
+        prop_name,
+        prop_value,
+    })
+}
+
+/// `['name']` / `['!name']` → StructName
+fn try_struct_name(p: &mut Parser) -> Option<Fragment> {
+    if !p.eat('[') {
+        return None;
+    }
+    p.skip_ws();
+    let invert = p.eat('!');
+    p.skip_ws();
+    let name = p.quoted()?;
+    p.skip_ws();
+    if !p.eat(']') {
+        return None;
+    }
+    let partial = name.ends_with('*');
+    Some(Fragment::StructName {
+        name: name.trim_end_matches('*').to_string(),
+        invert,
+        partial,
+    })
+}
+
+/// `<Type=A|B|C>` → NumberCollection (tried before `<Type=Value>`: single
+/// numeric values also land here, mirroring the C# parser priority).
+fn try_number_collection(p: &mut Parser) -> Option<Fragment> {
+    if !p.eat('<') {
+        return None;
+    }
+    let prop_type = p.identifier()?;
+    p.skip_ws();
+    if !p.eat('=') {
+        return None;
+    }
+    let first = p.number()?;
+    let mut values = vec![first];
+    loop {
+        p.skip_ws();
+        if !p.eat('|') {
+            break;
         }
-        if *pos >= chars.len() {
-            return Err(ParseError::UnexpectedEnd);
-        }
-        let result: String = chars[start..*pos].iter().collect();
-        *pos += 1; // skip closing '
-        Ok(result)
+        values.push(p.number()?);
+    }
+    p.skip_ws();
+    if !p.eat('>') {
+        return None;
+    }
+    Some(Fragment::NumberCollection { prop_type, values })
+}
+
+/// `<Type=Value>` (quoted string, number, or `*`) → PropertyValue
+fn try_property_value(p: &mut Parser) -> Option<Fragment> {
+    if !p.eat('<') {
+        return None;
+    }
+    let prop_type = p.identifier()?;
+    p.skip_ws();
+    if !p.eat('=') {
+        return None;
+    }
+    p.skip_ws();
+    let value = if p.eat('*') {
+        "*".to_string()
+    } else if let Some(s) = p.quoted() {
+        s
     } else {
-        parse_identifier(chars, pos)
+        let n = p.number()?;
+        format_number(n)
+    };
+    p.skip_ws();
+    if !p.eat('>') {
+        return None;
     }
+    Some(Fragment::PropertyValue {
+        prop_type,
+        value: Some(value),
+    })
 }
 
-fn parse_number(chars: &[char], pos: &mut usize) -> Result<usize, ParseError> {
-    let start = *pos;
-    while *pos < chars.len() && chars[*pos].is_ascii_digit() {
-        *pos += 1;
+/// `<Type>` → PropertyType
+fn try_property_type(p: &mut Parser) -> Option<Fragment> {
+    if !p.eat('<') {
+        return None;
     }
-    if *pos == start {
-        return Err(ParseError::Expected('0', *pos));
+    let prop_type = p.identifier()?;
+    p.skip_ws();
+    if !p.eat('>') {
+        return None;
     }
-    let s: String = chars[start..*pos].iter().collect();
-    s.parse::<usize>()
-        .map_err(|_| ParseError::Expected('0', start))
+    Some(Fragment::PropertyType(prop_type))
 }
 
-fn parse_until(chars: &[char], pos: &mut usize, delim: char) -> Result<String, ParseError> {
-    let start = *pos;
-    while *pos < chars.len() && chars[*pos] != delim {
-        *pos += 1;
+/// `<Enum::Member>` / `<Enum::>` → EnumValue
+fn try_enum_value(p: &mut Parser) -> Option<Fragment> {
+    if !p.eat('<') {
+        return None;
     }
-    if *pos >= chars.len() {
-        return Err(ParseError::Expected(delim, *pos));
+    let enum_type = p.identifier()?;
+    p.skip_ws();
+    if !p.eat(':') || !p.eat(':') {
+        return None;
     }
-    Ok(chars[start..*pos].iter().collect())
+    p.skip_ws();
+    let value = p.identifier();
+    p.skip_ws();
+    if !p.eat('>') {
+        return None;
+    }
+    Some(Fragment::EnumValue { enum_type, value })
 }
 
-fn expect_char(chars: &[char], pos: &mut usize, expected: char) -> Result<(), ParseError> {
-    if *pos >= chars.len() {
-        return Err(ParseError::Expected(expected, *pos));
+/// `[[*]]` → ArrayFlatten
+fn try_array_flatten(p: &mut Parser) -> Option<Fragment> {
+    if !p.eat('[') || !p.eat('[') {
+        return None;
     }
-    if chars[*pos] != expected {
-        return Err(ParseError::Expected(expected, *pos));
+    p.skip_ws();
+    if !p.eat('*') {
+        return None;
     }
-    *pos += 1;
-    Ok(())
+    p.skip_ws();
+    if !p.eat(']') || !p.eat(']') {
+        return None;
+    }
+    Some(Fragment::ArrayFlatten)
+}
+
+/// `[[N]]` → ArrayPropertyIndex
+fn try_array_prop_index(p: &mut Parser) -> Option<Fragment> {
+    if !p.eat('[') || !p.eat('[') {
+        return None;
+    }
+    let n = p.integer()?;
+    p.skip_ws();
+    if !p.eat(']') || !p.eat(']') {
+        return None;
+    }
+    if n < 0 {
+        return None;
+    }
+    Some(Fragment::ArrayPropertyIndex(n as usize))
+}
+
+/// `[N]` → ArrayIndex
+fn try_array_index(p: &mut Parser) -> Option<Fragment> {
+    if !p.eat('[') {
+        return None;
+    }
+    let n = p.integer()?;
+    p.skip_ws();
+    if !p.eat(']') {
+        return None;
+    }
+    if n < 0 {
+        return None;
+    }
+    Some(Fragment::ArrayIndex(n as usize))
+}
+
+/// `[*]` → Any; `{**}` → Flatten
+fn try_defaults(p: &mut Parser) -> Option<Fragment> {
+    if p.eat('[') {
+        p.skip_ws();
+        if !p.eat('*') {
+            return None;
+        }
+        p.skip_ws();
+        if !p.eat(']') {
+            return None;
+        }
+        return Some(Fragment::Any);
+    }
+    if p.eat('{') {
+        p.skip_ws();
+        if !p.eat('*') {
+            return None;
+        }
+        p.skip_ws();
+        if !p.eat('*') {
+            return None;
+        }
+        p.skip_ws();
+        if !p.eat('}') {
+            return None;
+        }
+        return Some(Fragment::Flatten);
+    }
+    None
+}
+
+/// Format a parsed number the way it would appear in a template literal.
+fn format_number(n: f64) -> String {
+    if n.fract() == 0.0 && n.abs() < 1e15 {
+        format!("{}", n as i64)
+    } else {
+        format!("{n}")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn frags(t: &str) -> Vec<Fragment> {
+        parse_template(t).unwrap().fragments
+    }
+
     #[test]
-    fn parse_datatable_simple() {
-        let ctx = parse_template("datatable:{'BaseStats*'}.{'CanUseAoA*'}").unwrap();
+    fn parse_spear_fixed_loadout() {
+        let ctx = parse_template("datatable:['SPEAR'].{'FixedLoadout*'}").unwrap();
         assert_eq!(ctx.loader, "datatable");
         assert_eq!(ctx.loader_param, None);
-        assert_eq!(ctx.fragments.len(), 2);
         assert_eq!(
-            ctx.fragments[0],
-            Fragment::StructProperty("BaseStats*".to_string())
-        );
-        assert_eq!(
-            ctx.fragments[1],
-            Fragment::StructProperty("CanUseAoA*".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_full_example() {
-        let ctx =
-            parse_template("datatable:['F-15C'].[0].{'HardpointSlots*'}.[[1]].<IntProperty='2'>")
-                .unwrap();
-        assert_eq!(ctx.loader, "datatable");
-        assert_eq!(ctx.fragments.len(), 5);
-        assert_eq!(
-            ctx.fragments[0],
-            Fragment::StructName {
-                name: "F-15C".into(),
-                invert: false
-            }
-        );
-        assert_eq!(ctx.fragments[1], Fragment::ArrayIndex(0));
-        assert_eq!(
-            ctx.fragments[2],
-            Fragment::StructProperty("HardpointSlots*".into())
-        );
-        assert_eq!(ctx.fragments[3], Fragment::ArrayPropertyIndex(1));
-        assert_eq!(
-            ctx.fragments[4],
-            Fragment::PropertyValue {
-                prop_type: "IntProperty".into(),
-                value: "2".into()
-            }
+            ctx.fragments,
+            vec![
+                Fragment::StructName {
+                    name: "SPEAR".into(),
+                    invert: false,
+                    partial: false
+                },
+                Fragment::StructProperty {
+                    name: "FixedLoadout".into(),
+                    partial: true
+                },
+            ]
         );
     }
 
     #[test]
-    fn parse_enum() {
-        let ctx = parse_template("datatable:<S_CannonType::NewEnumerator2>").unwrap();
-        assert_eq!(ctx.fragments.len(), 1);
+    fn parse_spear_hardpoint() {
         assert_eq!(
-            ctx.fragments[0],
-            Fragment::EnumValue {
-                enum_type: "S_CannonType".into(),
-                enum_value: "NewEnumerator2".into()
-            }
+            frags("datatable:['SPEAR'].{'HardpointCompatibilityList*'}.[[3]].<StrProperty='rgps'>"),
+            vec![
+                Fragment::StructName {
+                    name: "SPEAR".into(),
+                    invert: false,
+                    partial: false
+                },
+                Fragment::StructProperty {
+                    name: "HardpointCompatibilityList".into(),
+                    partial: true
+                },
+                Fragment::ArrayPropertyIndex(3),
+                Fragment::PropertyValue {
+                    prop_type: "StrProperty".into(),
+                    value: Some("rgps".into())
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_chimera_stats() {
+        assert_eq!(
+            frags("datatable:['ACG-01X'].[0].{'BaseStats*'}.{'MaxSpeed*'}.<FloatProperty='2500'>"),
+            vec![
+                Fragment::StructName {
+                    name: "ACG-01X".into(),
+                    invert: false,
+                    partial: false
+                },
+                Fragment::ArrayIndex(0),
+                Fragment::StructProperty {
+                    name: "BaseStats".into(),
+                    partial: true
+                },
+                Fragment::StructProperty {
+                    name: "MaxSpeed".into(),
+                    partial: true
+                },
+                Fragment::PropertyValue {
+                    prop_type: "FloatProperty".into(),
+                    value: Some("2500".into())
+                },
+            ]
         );
     }
 
     #[test]
     fn parse_any() {
-        let ctx = parse_template("datatable:[*]").unwrap();
-        assert_eq!(ctx.fragments.len(), 1);
-        assert_eq!(ctx.fragments[0], Fragment::Any);
+        assert_eq!(frags("datatable:[*]"), vec![Fragment::Any]);
     }
 
     #[test]
-    fn parse_array_flatten() {
-        let ctx = parse_template("datatable:[[*]]").unwrap();
-        assert_eq!(ctx.fragments.len(), 1);
-        assert_eq!(ctx.fragments[0], Fragment::ArrayFlatten);
-    }
-
-    #[test]
-    fn parse_struct_match() {
-        let ctx = parse_template("datatable:{*:{'Subtitle*'='0_Subtitle*'}}").unwrap();
-        assert_eq!(ctx.fragments.len(), 1);
+    fn parse_array_flatten_chain() {
         assert_eq!(
-            ctx.fragments[0],
-            Fragment::StructMatch {
-                struct_type: None,
-                prop_name: "Subtitle*".into(),
-                prop_value: "0_Subtitle*".into()
-            }
+            frags("datatable:{'HardpointCompatibilityList*'}.[[*]]"),
+            vec![
+                Fragment::StructProperty {
+                    name: "HardpointCompatibilityList".into(),
+                    partial: true
+                },
+                Fragment::ArrayFlatten,
+            ]
         );
     }
 
     #[test]
-    fn parse_with_param() {
-        let ctx = parse_template("datatable(MyTable):[*]").unwrap();
-        assert_eq!(ctx.loader, "datatable");
-        assert_eq!(ctx.loader_param, Some("MyTable".into()));
-        assert_eq!(ctx.fragments.len(), 1);
-        assert_eq!(ctx.fragments[0], Fragment::Any);
+    fn parse_enum_empty_member() {
+        assert_eq!(
+            frags("datatable:['RG-21'].{'BaseStats*'}.{'CannonType*'}.<S_CannonType::>"),
+            vec![
+                Fragment::StructName {
+                    name: "RG-21".into(),
+                    invert: false,
+                    partial: false
+                },
+                Fragment::StructProperty {
+                    name: "BaseStats".into(),
+                    partial: true
+                },
+                Fragment::StructProperty {
+                    name: "CannonType".into(),
+                    partial: true
+                },
+                Fragment::EnumValue {
+                    enum_type: "S_CannonType".into(),
+                    value: None
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_enum_member() {
+        assert_eq!(
+            frags("datatable:['Credits'].{'ButtonType*'}.<ButtonType::NewEnumerator1>"),
+            vec![
+                Fragment::StructName {
+                    name: "Credits".into(),
+                    invert: false,
+                    partial: false
+                },
+                Fragment::StructProperty {
+                    name: "ButtonType".into(),
+                    partial: true
+                },
+                Fragment::EnumValue {
+                    enum_type: "ButtonType".into(),
+                    value: Some("NewEnumerator1".into())
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_numeric_collection() {
+        assert_eq!(
+            frags("datatable:{'MissionCompletionBonus*'}.<IntProperty=2000>"),
+            vec![
+                Fragment::StructProperty {
+                    name: "MissionCompletionBonus".into(),
+                    partial: true
+                },
+                Fragment::NumberCollection {
+                    prop_type: "IntProperty".into(),
+                    values: vec![2000.0]
+                },
+            ]
+        );
+        assert_eq!(
+            frags("datatable:<FloatProperty=1|2.5|300>"),
+            vec![Fragment::NumberCollection {
+                prop_type: "FloatProperty".into(),
+                values: vec![1.0, 2.5, 300.0]
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_quoted_numeric_is_property_value() {
+        // Quoted numbers stay PropertyValueFragment (string compare).
+        assert_eq!(
+            frags("datatable:<FloatProperty='2'>"),
+            vec![Fragment::PropertyValue {
+                prop_type: "FloatProperty".into(),
+                value: Some("2".into())
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_type_only() {
+        assert_eq!(
+            frags("datatable:['RailgunPodSlow'].{'ReloadTime*'}.<FloatProperty>"),
+            vec![
+                Fragment::StructName {
+                    name: "RailgunPodSlow".into(),
+                    invert: false,
+                    partial: false
+                },
+                Fragment::StructProperty {
+                    name: "ReloadTime".into(),
+                    partial: true
+                },
+                Fragment::PropertyType("FloatProperty".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_invert() {
+        // C# grammar: `ZeroOrOne('!').And(String())` — the bang precedes the quoted name.
+        assert_eq!(
+            frags("datatable:[!'F-15C']"),
+            vec![Fragment::StructName {
+                name: "F-15C".into(),
+                invert: true,
+                partial: false
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_flatten_all() {
+        assert_eq!(frags("datatable:{**}"), vec![Fragment::Flatten]);
+    }
+
+    #[test]
+    fn parse_struct_match() {
+        // C# grammar: `{Type?:{'Name'='Value'}}` — strings are quoted.
+        assert_eq!(
+            frags("datatable:{SSchemeStruct:{'SchemeIndex'='2'}}"),
+            vec![Fragment::StructMatch {
+                struct_type: Some("SSchemeStruct".into()),
+                prop_name: "SchemeIndex".into(),
+                prop_value: "2".into()
+            }]
+        );
+        assert_eq!(
+            frags("datatable:{{'Name'='Value'}}"),
+            vec![Fragment::StructMatch {
+                struct_type: None,
+                prop_name: "Name".into(),
+                prop_value: "Value".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_wildcard_value() {
+        assert_eq!(
+            frags("datatable:{'IsAvailable*'}.<BoolProperty=*>"),
+            vec![
+                Fragment::StructProperty {
+                    name: "IsAvailable".into(),
+                    partial: true
+                },
+                Fragment::PropertyValue {
+                    prop_type: "BoolProperty".into(),
+                    value: Some("*".into())
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_loader_param() {
+        let ctx = parse_template("datatable(TableName):['a']").unwrap();
+        assert_eq!(ctx.loader_param.as_deref(), Some("TableName"));
+        let ctx = parse_template("raw('param value'):['a']").unwrap();
+        assert_eq!(ctx.loader_param.as_deref(), Some("param value"));
+    }
+
+    #[test]
+    fn parse_errors() {
+        assert!(parse_template("").is_err());
+        assert!(parse_template("datatable:").is_err());
+        assert!(parse_template("['a']").is_err()); // no loader
+        assert!(parse_template("datatable:['a']garbage").is_err());
+        assert!(parse_template("datatable:[nope]").is_err());
+    }
+
+    #[test]
+    fn double_quoted_strings_accepted() {
+        assert_eq!(
+            frags("datatable:[\"SPEAR\"]"),
+            vec![Fragment::StructName {
+                name: "SPEAR".into(),
+                invert: false,
+                partial: false
+            }]
+        );
     }
 }
