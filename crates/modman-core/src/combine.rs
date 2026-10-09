@@ -844,10 +844,28 @@ mod tests {
 
 /// A read-only source of pak entries.
 pub trait PakSource {
-    /// All entry paths (forward slashes).
+    /// All entry paths (forward slashes), as the pak's index stores them.
     fn files(&self) -> Vec<String>;
-    /// Read one entry's bytes.
+    /// Read one entry's bytes (path as reported by [`PakSource::files`]).
     fn read(&self, path: &str) -> Result<Vec<u8>, ApplyError>;
+    /// The pak's mount point. Records resolve to game paths as
+    /// `mount + record`, normalized to the game-root form used by
+    /// `../../../`-mounted mods.
+    fn mount_point(&self) -> String {
+        String::new()
+    }
+}
+
+/// Resolve a pak record to its effective game path: `mount + record`,
+/// with a leading `../../../` stripped (the game-root mount form).
+pub fn effective_path(mount: &str, record: &str) -> String {
+    let mut full = String::with_capacity(mount.len() + record.len() + 1);
+    full.push_str(mount);
+    if !full.is_empty() && !full.ends_with('/') && !record.starts_with('/') {
+        full.push('/');
+    }
+    full.push_str(record);
+    full.strip_prefix("../../../").unwrap_or(&full).to_string()
 }
 
 /// Result of a full combine run.
@@ -873,7 +891,12 @@ pub fn combine_sources(
     mods: &[&dyn PakSource],
     labels: &[String],
 ) -> Result<CombineOutcome, ApplyError> {
-    let base_files = base.files();
+    let base_mount = base.mount_point();
+    let base_files: Vec<String> = base
+        .files()
+        .iter()
+        .map(|r| effective_path(&base_mount, &r.replace('\\', "/")))
+        .collect();
     let base_find = |name: &str| -> Option<String> {
         base_files
             .iter()
@@ -895,28 +918,38 @@ pub fn combine_sources(
 
     for (mi, m) in mods.iter().enumerate() {
         let records = m.files();
+        let mount = m.mount_point();
         let norm = |r: &String| r.replace('\\', "/");
+        // (effective, raw) pairs: effective = mount + record (game path),
+        // raw = what the pak index stores (what reads use).
+        let pairs: Vec<(String, String)> = records
+            .iter()
+            .map(|r| {
+                let raw = norm(r);
+                let eff = effective_path(&mount, &raw);
+                (eff, raw)
+            })
+            .collect();
         let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for r in &records {
-            let n = norm(r);
-            if n.to_ascii_lowercase().ends_with(".uasset") {
-                let uexp_name = format!("{}.uexp", &n[..n.len() - 7]);
-                if let Some(uexp_rec) = records
-                    .iter()
-                    .find(|x| norm(x).eq_ignore_ascii_case(&uexp_name))
-                {
-                    if !seen.insert(n.clone()) {
+        for (eff, raw) in &pairs {
+            if eff.to_ascii_lowercase().ends_with(".uasset") {
+                let uexp_raw = format!("{}.uexp", &raw[..raw.len() - 7]);
+                let uexp_eff = format!("{}.uexp", &eff[..eff.len() - 7]);
+                if let Some((_, uraw)) = pairs.iter().find(|(e, r)| {
+                    e.eq_ignore_ascii_case(&uexp_eff) || r.eq_ignore_ascii_case(&uexp_raw)
+                }) {
+                    if !seen.insert(eff.clone()) {
                         continue;
                     }
-                    // The .uexp record belongs to this datatable pair — mark
-                    // it consumed so it never falls through to the
-                    // pass-through (which would clobber the merged output).
-                    seen.insert(norm(uexp_rec));
-                    let Some(vkey) = base_find(&n) else {
+                    // The .uexp record belongs to this pair — mark it
+                    // consumed so it never falls through to the pass-through
+                    // (which would clobber the merged output).
+                    seen.insert(uexp_eff.clone());
+                    let Some(vkey) = base_find(eff) else {
                         // Not a game file: single-winner pass-through pair.
-                        let ua = m.read(r)?;
-                        let ue = m.read(uexp_rec)?;
-                        for (k, b) in [(n.clone(), ua), (norm(uexp_rec), ue)] {
+                        let ua = m.read(raw)?;
+                        let ue = m.read(uraw)?;
+                        for (k, b) in [(eff.clone(), ua), (uexp_eff.clone(), ue)] {
                             if let Some((prev, _)) = passthrough.get(&k) {
                                 if *prev != mi {
                                     pt_conflicts.push(k.clone());
@@ -930,14 +963,14 @@ pub fn combine_sources(
                     let Some(vue_key) = base_find(&vkey_uexp) else {
                         continue;
                     };
-                    let ua = m.read(r)?;
-                    let ue = m.read(uexp_rec)?;
+                    let ua = m.read(raw)?;
+                    let ue = m.read(uraw)?;
                     // Only real DataTables are field-mergeable. Opaque assets
                     // (textures, audio, meshes) that happen to ship a
                     // .uasset+.uexp pair pass through single-winner — their
                     // payloads (pixels, samples, vertices) cannot be merged.
                     if modman_uasset::asset_class(&ua).ok().as_deref() != Some("DataTable") {
-                        for (k, b) in [(n.clone(), ua), (norm(uexp_rec), ue)] {
+                        for (k, b) in [(eff.clone(), ua), (uexp_eff.clone(), ue)] {
                             if let Some((prev, _)) = passthrough.get(&k) {
                                 if *prev != mi {
                                     pt_conflicts.push(k.clone());
@@ -952,7 +985,7 @@ pub fn combine_sources(
                     if ua == vua && ue == vue {
                         continue; // not actually an override
                     }
-                    dt_overrides.entry(n.clone()).or_default().push(Override {
+                    dt_overrides.entry(eff.clone()).or_default().push(Override {
                         ua,
                         ue,
                         label: labels
@@ -963,14 +996,14 @@ pub fn combine_sources(
                     continue;
                 }
             }
-            if seen.insert(n.clone()) {
-                let bytes = m.read(r)?;
-                if let Some((prev, _)) = passthrough.get(&n) {
+            if seen.insert(eff.clone()) {
+                let bytes = m.read(raw)?;
+                if let Some((prev, _)) = passthrough.get(eff) {
                     if *prev != mi {
-                        pt_conflicts.push(n.clone());
+                        pt_conflicts.push(eff.clone());
                     }
                 }
-                passthrough.insert(n.clone(), (mi, bytes));
+                passthrough.insert(eff.clone(), (mi, bytes));
             }
         }
     }

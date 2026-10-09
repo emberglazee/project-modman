@@ -942,6 +942,9 @@ fn cmd_combine(
                 .read_entry(path)
                 .map_err(|e| modman_core::apply::ApplyError::Asset(e.to_string()))
         }
+        fn mount_point(&self) -> String {
+            self.0.info().mount_point
+        }
     }
 
     let base_archive =

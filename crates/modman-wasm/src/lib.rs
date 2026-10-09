@@ -111,6 +111,9 @@ impl PakSource for RepakSource<'_> {
             .get(path, &mut *f)
             .map_err(|e| modman_core::apply::ApplyError::Asset(e.to_string()))
     }
+    fn mount_point(&self) -> String {
+        self.pak.mount_point().to_string()
+    }
 }
 
 enum MergeErr {
