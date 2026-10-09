@@ -178,11 +178,8 @@ impl MergeSession {
             Err(MergeErr::Missing(start, end)) => {
                 let obj = js_sys::Object::new();
                 let _ = js_sys::Reflect::set(&obj, &"status".into(), &"need".into());
-                let _ = js_sys::Reflect::set(
-                    &obj,
-                    &"offset".into(),
-                    &JsValue::from_f64(start as f64),
-                );
+                let _ =
+                    js_sys::Reflect::set(&obj, &"offset".into(), &JsValue::from_f64(start as f64));
                 let _ = js_sys::Reflect::set(
                     &obj,
                     &"length".into(),
@@ -205,14 +202,12 @@ impl MergeSession {
         let sparse_cell = RefCell::new(sparse);
         let base_pak = {
             let mut b = sparse_cell.borrow_mut();
-            repak::PakBuilder::new()
-                .reader(&mut *b)
-                .map_err(|e| {
-                    if let Some((s, e2)) = *self.missing.borrow() {
-                        return MergeErr::Missing(s, e2);
-                    }
-                    map_err(e)
-                })?
+            repak::PakBuilder::new().reader(&mut *b).map_err(|e| {
+                if let Some((s, e2)) = *self.missing.borrow() {
+                    return MergeErr::Missing(s, e2);
+                }
+                map_err(e)
+            })?
         };
         let base = RepakSource {
             pak: &base_pak,
@@ -241,8 +236,7 @@ impl MergeSession {
                 files: pak.files(),
             })
             .collect();
-        let src_refs: Vec<&dyn PakSource> =
-            mod_srcs.iter().map(|s| s as &dyn PakSource).collect();
+        let src_refs: Vec<&dyn PakSource> = mod_srcs.iter().map(|s| s as &dyn PakSource).collect();
         let labels: Vec<String> = self.mods.iter().map(|(l, _)| l.clone()).collect();
 
         // 3. The shared combine.
