@@ -16,21 +16,30 @@ pub struct GameInstall {
 
 /// Detect Project Wingman installation
 pub fn detect_game() -> Option<GameInstall> {
-    // Check common Steam library locations
-    let candidates = [
-        // Linux Steam
-        PathBuf::from(
-            std::env::var("HOME").unwrap_or_default()
-                + "/.steam/steam/steamapps/common/Project Wingman",
-        ),
-        // Windows Steam (WSL/Linux cross-mount)
-        PathBuf::from("/mnt/c/Program Files (x86)/Steam/steamapps/common/Project Wingman"),
-        // User-specified via env var
-        std::env::var("PW_INSTALL")
-            .map(PathBuf::from)
-            .ok()
-            .unwrap_or_default(),
-    ];
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // User-specified first: an explicit choice always wins.
+    if let Ok(pw) = std::env::var("PW_INSTALL") {
+        candidates.push(PathBuf::from(pw));
+    }
+    // Linux Steam: modern default, legacy symlink, Flatpak.
+    candidates.push(PathBuf::from(format!(
+        "{home}/.local/share/Steam/steamapps/common/Project Wingman"
+    )));
+    candidates.push(PathBuf::from(format!(
+        "{home}/.steam/steam/steamapps/common/Project Wingman"
+    )));
+    candidates.push(PathBuf::from(format!(
+        "{home}/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/Project Wingman"
+    )));
+    // Windows Steam (native, and WSL cross-mount).
+    candidates.push(PathBuf::from(
+        "C:/Program Files (x86)/Steam/steamapps/common/Project Wingman",
+    ));
+    candidates.push(PathBuf::from(
+        "/mnt/c/Program Files (x86)/Steam/steamapps/common/Project Wingman",
+    ));
 
     for candidate in &candidates {
         let paks = candidate.join("ProjectWingman/Content/Paks");
