@@ -319,6 +319,32 @@ pub fn skin_component(paks_dir: &Path) -> (Option<MergeComponent>, Vec<String>) 
     )
 }
 
+/// Collect the raw skin files from installed `*_P.pak`s (records under
+/// `ProjectWingman/Content/Assets/Skins`) for embedding into a merged pak —
+/// makes the merge self-contained (the C# merger never does this; the skin
+/// paks must otherwise stay installed).
+pub fn collect_skin_files(paks_dir: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut paks: Vec<PathBuf> = Vec::new();
+    collect_skin_paks(paks_dir, &mut paks);
+    paks.sort();
+    let mut out = Vec::new();
+    for pak in &paks {
+        let Ok(archive) = modman_pak::PakArchive::open(pak) else {
+            continue;
+        };
+        for record in archive.files() {
+            let norm = record.replace('\\', "/");
+            if !norm.starts_with("ProjectWingman/Content/Assets/Skins") {
+                continue;
+            }
+            if let Ok(bytes) = archive.read_entry(&record) {
+                out.push((norm, bytes));
+            }
+        }
+    }
+    out
+}
+
 fn collect_skin_paks(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;

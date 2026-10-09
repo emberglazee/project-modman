@@ -72,6 +72,11 @@ enum Commands {
         /// Write a merge report (JSON) to this file (relative paths go next to the output)
         #[arg(long)]
         report: Option<String>,
+        /// Do NOT embed detected skin-pak files (Assets/Skins) into the merged
+        /// pak; with this flag the output matches the C# merger (skin paks must
+        /// stay installed for the textures to resolve)
+        #[arg(long)]
+        no_embed_skins: bool,
     },
     /// Pack preset files into standalone merged mods (preset embedded at
     /// Content/sicario, like the C# `preset-pack` command)
@@ -240,6 +245,7 @@ fn main() {
             install_path,
             output,
             report,
+            no_embed_skins,
         }) => {
             // Determine game path
             let game_path = install_path.clone().or_else(|| {
@@ -327,10 +333,26 @@ fn main() {
                         let out_dir = std::path::PathBuf::from(out_dir);
                         let mod_refs: Vec<&modman_core::manifest::WingmanMod> =
                             all_mods.iter().collect();
+                        // Self-contained mode (default): embed detected skin
+                        // files so the merged pak works without the original
+                        // skin paks installed (--no-embed-skins restores the
+                        // strict C# behavior).
+                        let extra_files: Vec<(String, Vec<u8>)> = if no_embed_skins {
+                            Vec::new()
+                        } else {
+                            let files = comps::collect_skin_files(&game_paks);
+                            if !files.is_empty() {
+                                println!(
+                                    "  Embedding {} skin file(s) from installed skin paks",
+                                    files.len()
+                                );
+                            }
+                            files
+                        };
                         match build_pak_from_mods(
                             &game_paks,
                             &mod_refs,
-                            &[],
+                            &extra_files,
                             &out_dir,
                             "SicarioMerge_P.pak",
                             true,
