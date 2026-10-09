@@ -761,8 +761,52 @@ fn main() {
                 "Project Modman v{} — a Project Wingman modding utility",
                 env!("CARGO_PKG_VERSION")
             );
+            println!();
+            println!("This is a command-line tool. The easiest ways to use it:");
+            println!();
+            println!("  * No install, right in your browser:");
+            println!("      https://emberglazee.github.io/project-modman/");
+            println!("  * Offline single file (double-click it, nothing else needed):");
+            println!("      download modman-merge.html from the releases page");
+            println!("  * In a terminal:");
+            println!("      modman --help");
+            println!();
+            println!("Docs & releases: https://github.com/emberglazee/project-modman");
+            wait_if_double_clicked();
         }
     }
+}
+
+/// Keep the welcome screen readable after a double-click:
+/// - Windows: an exe started from Explorer owns a console with exactly one
+///   attached process — pause so the window doesn't vanish.
+/// - macOS/Linux: a double-clicked binary gets a terminal (macOS always,
+///   most Linux file managers when configured to) — pause when attached to
+///   one so the window stays. Piped or scripted runs (no tty) never pause.
+fn wait_if_double_clicked() {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Console::GetConsoleProcessList;
+        let mut list = [0u32; 2];
+        let count = unsafe { GetConsoleProcessList(list.as_mut_ptr(), list.len() as u32) };
+        if count == 1 {
+            pause_for_enter();
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+            pause_for_enter();
+        }
+    }
+}
+
+fn pause_for_enter() {
+    println!();
+    println!("Press Enter to close this window...");
+    let mut buf = String::new();
+    let _ = std::io::stdin().read_line(&mut buf);
 }
 
 /// Load all mods from a file or directory (kind-aware, lenient).

@@ -88,6 +88,18 @@ WebAssembly and running entirely in your browser:
   loading.
 - Shows the same merge report (order + conflicts) with a friendly UI.
 
+### Downloading & first run
+
+- **Windows** — double-clicking `modman.exe` shows a welcome screen (it pauses so you
+  can read it) pointing at the browser option; the CLI itself takes arguments
+  (`modman --help` in a terminal). Windows may show a SmartScreen prompt for a new
+  unsigned binary: *More info → Run anyway*.
+- **macOS** — the binaries are unsigned, so Gatekeeper blocks the first run:
+  right-click → Open once, or `xattr -d com.apple.quarantine modman`.
+- **Linux** — `chmod +x modman` and run it from a terminal.
+- Or skip all of that: the **web page**, or the **offline `modman-merge.html`**
+  (one file, double-click it — no install, no server, no network).
+
 ## Building
 
 Requires Rust 2021 edition or later.

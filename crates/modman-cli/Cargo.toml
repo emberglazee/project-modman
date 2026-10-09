@@ -13,3 +13,8 @@ modman-core = { path = "../modman-core" }
 modman-uasset = { path = "../modman-uasset" }
 serde.workspace = true
 serde_json.workspace = true
+
+# Double-click detection: pause the welcome screen when the exe was opened
+# from Explorer (a console with a single attached process).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
