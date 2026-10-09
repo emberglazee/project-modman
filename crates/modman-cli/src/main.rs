@@ -72,6 +72,11 @@ enum Commands {
         /// Path to the patch file
         input: String,
     },
+    /// Scan for installed Sicario mods in a Paks directory (or game install)
+    Scan {
+        /// Game install directory or Paks directory
+        path: String,
+    },
 }
 
 fn main() {
@@ -381,6 +386,36 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some(Commands::Scan { path }) => {
+            let paks_dir = resolve_paks_dir(&path);
+            println!("Scanning: {}", paks_dir.display());
+            let report = modman_core::discovery::scan_paks_dir(&paks_dir);
+            for c in &report.components {
+                let kind = match c.kind {
+                    modman_core::discovery::ComponentKind::Preset => "preset",
+                    modman_core::discovery::ComponentKind::BuildRequest => "request",
+                };
+                let pak_name = c
+                    .pak_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                println!("- {pak_name} [{kind}] {}", c.record_path);
+                for m in &c.mods {
+                    print_mod_summary(m, "    ");
+                }
+            }
+            println!(
+                "\n{} pak(s) scanned, {} component(s), {} mod(s), {} error(s)",
+                report.paks_scanned,
+                report.components.len(),
+                report.mod_count(),
+                report.errors.len()
+            );
+            for (p, e) in &report.errors {
+                eprintln!("  error {}: {}", p.display(), e);
+            }
+        }
         None => {
             println!(
                 "Project Modman v{} — a Project Wingman modding utility",
@@ -526,4 +561,16 @@ fn cmd_patch(path: &str) -> Result<(), String> {
         print_mod_summary(&m, "");
     }
     Ok(())
+}
+
+/// Resolve a user-supplied path to the Paks directory: accepts either the
+/// game install dir or the Paks dir itself.
+fn resolve_paks_dir(path: &str) -> std::path::PathBuf {
+    let p = std::path::Path::new(path);
+    let nested = p.join("ProjectWingman/Content/Paks");
+    if nested.is_dir() {
+        nested
+    } else {
+        p.to_path_buf()
+    }
 }

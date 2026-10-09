@@ -133,6 +133,14 @@ impl PakArchive {
             .read_file(&entry, &mut pak_file, &mut out_file)?;
         Ok(())
     }
+
+    /// Read a single entry's bytes into memory (raw pak path).
+    pub fn read_entry(&self, entry_path: &str) -> Result<Vec<u8>, Error> {
+        let mut pak_file = std::fs::File::open(&self.path)?;
+        let mut buf = Vec::new();
+        self.reader.read_file(entry_path, &mut pak_file, &mut buf)?;
+        Ok(buf)
+    }
 }
 
 /// Create a .pak file from a directory

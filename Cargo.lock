@@ -323,6 +323,7 @@ dependencies = [
 name = "modman-core"
 version = "0.1.0"
 dependencies = [
+ "modman-pak",
  "modman-uasset",
  "serde",
  "serde_json",
