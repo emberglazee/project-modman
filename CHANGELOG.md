@@ -1,5 +1,38 @@
 # Changelog
 
+## [v0.3.0] — 2026-10-10
+
+**Community-hardened.** Real Frontline-59 skin mods (the K-9 liveries) exposed
+a family of merge bugs that only appear with the 2.0-era mods — every one
+fixed and in-game verified, plus an offline single-file page.
+
+### Merge fixes (found with real f59 mods)
+- **Replaced imports**: mods that swap an import entry in place (the F59
+  skins swap a texture reference to their own asset) are now carried into
+  the merged import table with every uexp reference remapped to preserve its
+  semantic target — previously the refs silently resolved to the vanilla
+  entry and the skins reverted.
+- **Mount-aware paths**: mods that mount at a nested path (e.g.
+  `../../../ProjectWingman/Plugins/MagadanFront/Content/`) with short
+  records now resolve to their real game paths in the merged pak.
+- **Opaque assets**: textures, audio and meshes that ship a `.uasset` +
+  `.uexp` pair pass through single-winner cleanly (their payloads cannot be
+  field-merged) instead of failing the datatable parse.
+- **Diagnostics**: merge warnings reach the report again, and an unmergeable
+  datatable falls back to the last override's version instead of aborting.
+
+### Single-file offline page
+- The web UI builds into **one self-contained HTML file** (wasm embedded):
+  double-click it, no server, no network, works offline. Shipped as a
+  release asset (`modman-merge.html`) and linked from the Pages site.
+
+### Verification
+- The reporter's three conflicting f59 mods (K-9 skins ×2 + FS-15) merge
+  into one pak: FS-15 model, F-15SMTD row, mission manifest and all K-9
+  liveries confirmed in-game.
+- Browser output byte-identical to the CLI (sha256 `5bb7882d…` on identical
+  inputs), in both hosted and single-file modes.
+
 ## [v0.2.0] — 2026-10-09
 
 **Merging without metadata.** The headline feature: `modman combine` merges

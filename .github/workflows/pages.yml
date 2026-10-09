@@ -47,7 +47,9 @@ jobs:
           wasm-pack --version
 
       - name: Build wasm + site
-        run: wasm-pack build crates/modman-wasm --target web --release --out-dir ../../web/pkg
+        run: |
+          wasm-pack build crates/modman-wasm --target no-modules --release --out-dir ../../web/pkg
+          node web/build-single.mjs
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

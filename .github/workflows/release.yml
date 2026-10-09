@@ -143,9 +143,49 @@ jobs:
     with:
       ref: ${{ needs.bump.outputs.sha }}
 
+  # Builds the offline single-file page (wasm + inlined JS/CSS) so every
+  # release ships a double-clickable merge tool alongside the binaries.
+  single-file:
+    name: Single-file page
+    needs: bump
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.bump.outputs.sha }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm
+
+      - name: Install wasm-pack
+        run: |
+          curl -sL "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-unknown-linux-musl.tar.gz" \
+            | tar xz -C /tmp
+          mkdir -p "$HOME/.cargo/bin"
+          cp /tmp/wasm-pack-v0.15.0-x86_64-unknown-linux-musl/wasm-pack "$HOME/.cargo/bin/"
+          wasm-pack --version
+
+      - name: Build wasm + single file
+        run: |
+          wasm-pack build crates/modman-wasm --target no-modules --release --out-dir ../../web/pkg
+          node web/build-single.mjs
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: modman-single-file
+          path: web/dist/modman-merge.html
+
   create-release:
     name: Create Release
-    needs: [bump, build]
+    needs: [bump, build, single-file]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -185,6 +225,7 @@ jobs:
           cp bin-stage/modman-win-arm64.exe/modman.exe release-assets/modman-win-arm64.exe
           cp bin-stage/modman-macos-arm64/modman release-assets/modman-macos-arm64
           cp bin-stage/modman-macos-amd64/modman release-assets/modman-macos-amd64
+          cp bin-stage/modman-single-file/modman-merge.html release-assets/modman-merge.html
           chmod +x release-assets/modman-linux-* release-assets/modman-macos-*
 
       # Checksums for every published artifact so a locally downloaded build

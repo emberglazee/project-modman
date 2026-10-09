@@ -1,7 +1,10 @@
 // Project Modman — in-browser mod merge.
 // All processing happens locally; the game pak is read in-place via File.slice.
-
-import init, { MergeSession } from './pkg/modman_wasm.js';
+//
+// Classic script (no ES modules) so it works both:
+//  - hosted: wasm_bindgen loads from pkg/modman_wasm.js and fetches the .wasm
+//  - single-file / file://: the builder inlines everything and sets
+//    window.MODMAN_WASM_BASE64, initialized synchronously from bytes.
 
 const $ = (id) => document.getElementById(id);
 const modFilesEl = $('modFiles');
@@ -104,7 +107,7 @@ async function runMerge() {
   let bytesRead = 0;
 
   try {
-    const session = new MergeSession();
+    const session = new wasm_bindgen.MergeSession();
     const sorted = [...modFiles].sort((a, b) => a.name.localeCompare(b.name));
     for (const f of sorted) {
       setStatus(`Loading ${f.name}…`, 0.02);
@@ -168,6 +171,12 @@ function showReport(report) {
     html += '</ul>';
   }
 
+  if (report.warnings && report.warnings.length) {
+    html += '<h3 class="warn">Warnings</h3><ul class="conflicts">';
+    for (const w of report.warnings) html += `<li>${escapeHtml(w)}</li>`;
+    html += '</ul>';
+  }
+
   reportEl.innerHTML = html;
 }
 
@@ -189,9 +198,25 @@ mergeBtn.addEventListener('click', runMerge);
 
 // ── Init ─────────────────────────────────────────────────────────────────
 
-init().then(() => {
-  wasmReady = true;
-  refreshUi();
-}).catch((e) => {
-  setError(`Failed to load the merge engine: ${e}`);
-});
+function initEngine() {
+  if (typeof window.MODMAN_WASM_BASE64 === 'string') {
+    // Single-file build: the wasm bytes are embedded — no fetch, works on
+    // file:// with zero network access.
+    const bin = atob(window.MODMAN_WASM_BASE64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    wasm_bindgen.initSync(bytes);
+    return Promise.resolve();
+  }
+  // Hosted build: fetch the .wasm next to the page.
+  return wasm_bindgen('./pkg/modman_wasm_bg.wasm');
+}
+
+initEngine()
+  .then(() => {
+    wasmReady = true;
+    refreshUi();
+  })
+  .catch((e) => {
+    setError(`Failed to load the merge engine: ${e}`);
+  });
