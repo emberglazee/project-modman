@@ -36,7 +36,7 @@ Verified against the C# merger at byte level (oracle harness in `~/modding/proje
 |---|---|
 | DataTable patches (propertyValue, modify, array, text, duplicate*, delete) | ✅ byte-exact (uassets identical; uexps modulo random FText keys) |
 | `filePatches` hex engine (all types, windows, filters, length fix-up) | ✅ byte-exact, including the destructive absent-`value` path |
-| `objectRef` (import-table writes) + `customSkins` PSM slot merging | ✅ byte-exact (oracle-verified skin merge) |
+| `objectRef` (import-table writes) + `customSkins` PSM slot merging | ✅ byte-exact + **in-game verified** (AJS-37 skin slot live) |
 | Multi-mod merge order + conflict semantics | ✅ oracle-verified |
 | Components, parameters/inputs, engine-version gate, `GetLabel` | ✅ |
 | Merge report (`--report`) | ✅ byte-identical |
