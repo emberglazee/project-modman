@@ -44,7 +44,12 @@ Verified against the C# merger at byte level (oracle harness in `~/modding/proje
 | In-game acceptance | ✅ (user-verified) |
 
 **All known v1 parity gaps are closed.** `customSkins` skin-slot merging works with real
-PSM skin paks (`ProjectWingman/Content/Assets/Skins/<aircraft-row>/…`).
+PSM skin paks (`ProjectWingman/Content/Assets/Skins/<aircraft-row>/…`), live-verified in-game.
+
+### Beyond parity
+
+- **Self-contained merges** (default): the merged pak embeds detected skin files, so one pak
+  installs everything (`--no-embed-skins` restores the strict C# output).
 
 ## Building
 
