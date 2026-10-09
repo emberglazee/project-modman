@@ -53,6 +53,23 @@ pub enum PatchOp {
     },
 }
 
+impl PatchOp {
+    /// Short label matching the Sicario patch `type` string.
+    pub fn label(&self) -> &'static str {
+        match self {
+            PatchOp::PropertyValue { .. } => "propertyValue",
+            PatchOp::ModifyPropertyValue { .. } => "modifyPropertyValue",
+            PatchOp::ArrayPropertyValue { .. } => "arrayPropertyValue",
+            PatchOp::TextProperty { .. } => "textProperty",
+            PatchOp::DuplicateEntry { .. } => "duplicateEntry",
+            PatchOp::DuplicateProperty { .. } => "duplicateProperty",
+            PatchOp::DuplicateArrayItem { .. } => "duplicateArrayItem",
+            PatchOp::DeleteEntry(_) => "deleteEntry",
+            PatchOp::ObjectRef { .. } => "objectRef",
+        }
+    }
+}
+
 /// Arithmetic operation for modifyPropertyValue
 #[derive(Debug, Clone, Copy)]
 pub enum ArithmeticOp {

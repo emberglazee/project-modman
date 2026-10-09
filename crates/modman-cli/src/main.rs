@@ -300,33 +300,44 @@ fn main() {
                         let needle = target_file
                             .trim_start_matches("../../../")
                             .replace('\\', "/");
-                        let entry = all_files
-                            .iter()
-                            .find(|f| f.as_str() == needle)
-                            .or_else(|| all_files.iter().find(|f| f.ends_with(&needle)));
+                        // Mods target the .uexp; the walker needs the .uasset companion too.
+                        let uexp_needle = if needle.ends_with(".uexp") {
+                            needle.clone()
+                        } else if needle.ends_with(".uasset") {
+                            needle.replace(".uasset", ".uexp")
+                        } else {
+                            format!("{needle}.uexp")
+                        };
+                        let uasset_needle = uexp_needle.replace(".uexp", ".uasset");
 
-                        let entry = match entry {
-                            Some(e) => e.clone(),
-                            None => {
-                                eprintln!("  Warning: no matching pak entry for '{}'", target_file);
-                                continue;
-                            }
+                        let find_entry = |name: &str| -> Option<String> {
+                            all_files
+                                .iter()
+                                .find(|f| f.as_str() == name)
+                                .or_else(|| all_files.iter().find(|f| f.ends_with(name)))
+                                .cloned()
                         };
 
-                        let stem = std::path::Path::new(&entry)
+                        let (Some(uasset_entry), Some(uexp_entry)) =
+                            (find_entry(&uasset_needle), find_entry(&uexp_needle))
+                        else {
+                            eprintln!("  Warning: no matching pak entries for '{}'", target_file);
+                            continue;
+                        };
+
+                        let stem = std::path::Path::new(&uexp_entry)
                             .file_stem()
                             .map(|s| s.to_string_lossy().to_string())
                             .unwrap_or_else(|| "asset".to_string());
                         let local_uasset = extract_dir.join(format!("{stem}.uasset"));
                         let local_uexp = extract_dir.join(format!("{stem}.uexp"));
 
-                        if let Err(e) = pak.extract_entry(&entry, &local_uasset) {
-                            eprintln!("  Extract error ({}): {}", entry, e);
+                        if let Err(e) = pak.extract_entry(&uasset_entry, &local_uasset) {
+                            eprintln!("  Extract error ({}): {}", uasset_entry, e);
                             continue;
                         }
-                        let uexp_entry = entry.replace(".uasset", ".uexp");
                         if let Err(e) = pak.extract_entry(&uexp_entry, &local_uexp) {
-                            eprintln!("  Note: no .uexp companion for '{}' ({})", entry, e);
+                            eprintln!("  Extract error ({}): {}", uexp_entry, e);
                             continue;
                         }
 
@@ -358,7 +369,31 @@ fn main() {
                                         "MISMATCH"
                                     }
                                 );
-                                println!("  Patch application pending (A-layer milestone); no output written.");
+                                for cp in patches.iter() {
+                                    let nodes = modman_core::resolver::resolve(&dt, &cp.fragments);
+                                    let spans: Vec<String> = nodes
+                                        .iter()
+                                        .take(4)
+                                        .map(|n| {
+                                            n.value_span()
+                                                .map(|(a, b)| format!("{a}..{b}"))
+                                                .unwrap_or_else(|| "n/a".to_string())
+                                        })
+                                        .collect();
+                                    println!(
+                                        "    [{}] -> {} target(s){}",
+                                        cp.operation.label(),
+                                        nodes.len(),
+                                        if spans.is_empty() {
+                                            String::new()
+                                        } else {
+                                            format!(" @ {}", spans.join(", "))
+                                        }
+                                    );
+                                }
+                                println!(
+                                    "  Patch application pending (length-changing + merge milestones); no output written."
+                                );
                             }
                             Err(e) => eprintln!("  Walk error: {}", e),
                         }
