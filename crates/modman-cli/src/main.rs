@@ -906,7 +906,7 @@ fn cmd_combine(
         return Err("no paks given".to_string());
     }
 
-    let base = modman_pak::PakArchive::open(&game_paks.join("pakchunk0-WindowsNoEditor.pak"))
+    let base = modman_pak::PakArchive::open(game_paks.join("pakchunk0-WindowsNoEditor.pak"))
         .map_err(|e| format!("Pak error: {e}"))?;
     let base_files = base.files();
     let base_find = |name: &str| -> Option<String> {
