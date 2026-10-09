@@ -12,13 +12,18 @@ use std::rc::Rc;
 use modman_core::combine::{combine_sources, PakSource};
 use wasm_bindgen::prelude::*;
 
+/// Provided byte regions of the game pak, sorted by offset.
+type RegionMap = Rc<RefCell<Vec<(u64, Vec<u8>)>>>;
+/// The range the sparse reader is currently missing (if any).
+type MissingSlot = Rc<RefCell<Option<(u64, u64)>>>;
+
 /// A Read+Seek over a sparse set of provided byte regions of a big file.
 /// Reads outside the provided regions fail with an io error and record the
 /// missing range, so the JS side can fetch it and retry.
 struct SparseReader {
     size: u64,
     regions: Vec<(u64, Vec<u8>)>,
-    missing: Rc<RefCell<Option<(u64, u64)>>>,
+    missing: MissingSlot,
     pos: u64,
 }
 
@@ -73,10 +78,7 @@ impl Read for SparseReader {
                 Some((s, e)) => (s.min(start), e.max(end)),
                 None => (start, end),
             });
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "sparse region missing",
-            ))
+            Err(std::io::Error::other("sparse region missing"))
         }
     }
 }
@@ -126,8 +128,8 @@ fn map_err(e: repak::Error) -> MergeErr {
 pub struct MergeSession {
     mods: Vec<(String, Vec<u8>)>,
     game_size: u64,
-    regions: Rc<RefCell<Vec<(u64, Vec<u8>)>>>,
-    missing: Rc<RefCell<Option<(u64, u64)>>>,
+    regions: RegionMap,
+    missing: MissingSlot,
 }
 
 #[wasm_bindgen]
