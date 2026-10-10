@@ -801,7 +801,7 @@ fn main() {
                         None => {
                             let game = install_path
                                 .clone()
-                                .or_else(|| modman_cli_game_path())
+                                .or_else(modman_cli_game_path)
                                 .unwrap_or_else(|| {
                                     eprintln!(
                                         "Error: Could not detect Project Wingman. \n\
@@ -1061,7 +1061,7 @@ fn main() {
 /// - macOS/Linux: a double-clicked binary gets a terminal (macOS always,
 ///   most Linux file managers when configured to) — pause when attached to
 ///   one so the window stays. Piped or scripted runs (no tty) never pause.
-/// Game path via auto-detection (game.rs) — used by locres extract.
+/// Game path via auto-detection (used by `locres extract`).
 fn modman_cli_game_path() -> Option<String> {
     crate::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
 }
