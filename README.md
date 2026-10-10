@@ -2,6 +2,21 @@
 
 > A Rust modding utility for Project Wingman (PW) — inspired by Project Sicario.
 
+## Contents
+
+- [Status](#status)
+- [V1 Scope — 1:1 parity with the Project Sicario merger](#v1-scope--11-parity-with-the-project-sicario-merger)
+- [Parity status](#parity-status)
+  - [Beyond parity](#beyond-parity)
+- [Merging mods without metadata (`combine`)](#merging-mods-without-metadata-combine)
+  - [Web UI — no install needed](#web-ui--no-install-needed)
+  - [Downloading & first run](#downloading--first-run)
+- [Translation mods (`.locres`)](#translation-mods-locres)
+- [Building](#building)
+- [Usage](#usage)
+- [Project Structure](#project-structure)
+- [License](#license)
+
 ## Status
 
 **v1 (Sicario-merger parity) is essentially complete and byte-verified against the C# merger.** Working today:
