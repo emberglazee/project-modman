@@ -340,6 +340,9 @@ fn main() {
             no_embed_skins,
             non_interactive: _,
         }) => {
+            let install_path = install_path.as_deref().map(unquote).map(str::to_string);
+            let output = output.as_deref().map(unquote).map(str::to_string);
+            let report = report.as_deref().map(unquote).map(str::to_string);
             // Determine game path
             let game_path = install_path.clone().or_else(|| {
                 crate::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
@@ -789,6 +792,8 @@ fn main() {
             install_path,
             output,
         }) => {
+            let install_path = install_path.as_deref().map(unquote).map(str::to_string);
+            let output = output.as_deref().map(unquote).map(str::to_string);
             let game_path = install_path.clone().or_else(|| {
                 crate::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
             });
@@ -1450,6 +1455,7 @@ fn cmd_combine(
         return Err("nothing to combine (no conflicting overrides found)".to_string());
     }
     let staging = out_dir.join("staging");
+    // (the scratch dir is removed again at the end of this function)
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
     for (key, bytes) in &files {
@@ -1502,6 +1508,9 @@ fn cmd_combine(
         &field_conflicts,
         &other_warnings,
     );
+    // The staging dir is a scratch area; the C# transport left none behind,
+    // and in the Vortex flow it would be deployed to the game as junk files.
+    let _ = std::fs::remove_dir_all(out_dir.join("staging"));
     Ok(())
 }
 
@@ -1512,6 +1521,13 @@ fn cmd_combine(
 /// A build failure with a Project Sicario-compatible exit code. Vortex
 /// integrations surface these as specific dialogs:
 /// 404 = install dir missing, 412 = missing source file, 422 = bad patch.
+/// Strip the surrounding quotes that GUI integrations (Vortex spawns
+/// without a shell, so `--installPath="C:\\Game"` arrives with the quotes
+/// intact) leave on path values.
+fn unquote(s: &str) -> &str {
+    s.trim_matches('"')
+}
+
 struct BuildFail {
     code: i32,
     msg: String,
@@ -1690,6 +1706,9 @@ fn build_pak_from_mods(
         None,
     )
     .map_err(|e| format!("Pack error: {e}"))?;
+    // The staging dir is a scratch area; the C# transport left none behind,
+    // and in the Vortex flow it would be deployed to the game as junk files.
+    let _ = std::fs::remove_dir_all(out_dir.join("staging"));
     Ok((ok, files.len(), field_conflicts))
 }
 
