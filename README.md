@@ -100,6 +100,31 @@ WebAssembly and running entirely in your browser:
 - Or skip all of that: the **web page**, or the **offline `modman-merge.html`**
   (one file, double-click it — no install, no server, no network).
 
+## Translation mods (`.locres`)
+
+The game's text lives in Unreal localization binaries at
+`ProjectWingman/Content/Localization/ProjectWingman/<lang>/ProjectWingman.locres`.
+modman reads and patches them with full structural fidelity — every namespace/key
+hash, entry order and string reference count is preserved, so in-game lookups never
+miss. (Verified: parse → write reproduces all nine shipped language files
+byte-for-byte.)
+
+```bash
+# 1) Dump a locres to a translator-friendly CSV (key,source,Translation)
+modman locres read ProjectWingman.locres -o translations.csv
+
+# 2) Translate the third column — the CSV matches the UEExtractor format,
+#    so the existing translator tooling and workflows apply as-is
+
+# 3) Build a ready-to-install translation mod in one step
+modman locres pak ProjectWingman.locres translations.csv --lang en-US -o MyTranslation_P.pak
+```
+
+Drop the result into `~mods`. Extract the source locres from your game's pak with
+`modman locres read` on the file obtained via `modman unpack`, or use
+`cargo run -p modman-pak --example extract_locres` (repo checkout) to pull all
+languages at once.
+
 ## Building
 
 Requires Rust 2021 edition or later.
