@@ -140,10 +140,10 @@ enum Commands {
         /// Paths to preset/mod files or directories
         preset_paths: Vec<String>,
         /// Path to the game install directory (auto-detected if omitted)
-        #[arg(long)]
+        #[arg(long, alias = "installPath")]
         install_path: Option<String>,
         /// Write the merged mod (SicarioMerge_P.pak) to this directory; omit for a preview
-        #[arg(long)]
+        #[arg(long, alias = "outputPath")]
         output: Option<String>,
         /// Write a merge report (JSON) to this file (relative paths go next to the output)
         #[arg(long)]
@@ -153,6 +153,10 @@ enum Commands {
         /// stay installed for the textures to resolve)
         #[arg(long)]
         no_embed_skins: bool,
+        /// Accepted for compatibility with Project Sicario Manager's CLI
+        /// (Vortex integrations pass it); there are no interactive prompts
+        #[arg(long)]
+        non_interactive: bool,
     },
     /// Pack preset files into standalone merged mods (preset embedded at
     /// Content/sicario, like the C# `preset-pack` command)
@@ -334,6 +338,7 @@ fn main() {
             output,
             report,
             no_embed_skins,
+            non_interactive: _,
         }) => {
             // Determine game path
             let game_path = install_path.clone().or_else(|| {
@@ -342,6 +347,11 @@ fn main() {
 
             match game_path {
                 Some(path) => {
+                    if !std::path::Path::new(&path).is_dir() {
+                        // C# parity: 404 = install directory doesn't exist
+                        eprintln!("Install not found! The game install directory doesn't exist.");
+                        std::process::exit(404);
+                    }
                     let game_paks = std::path::Path::new(&path).join("ProjectWingman/Content/Paks");
                     println!("Game: {}", path);
                     println!("Paks: {}", game_paks.display());
@@ -476,8 +486,8 @@ fn main() {
                                 );
                             }
                             Err(e) => {
-                                eprintln!("{e}");
-                                std::process::exit(1);
+                                eprintln!("{}", e.msg);
+                                std::process::exit(e.code);
                             }
                         }
 
@@ -661,7 +671,8 @@ fn main() {
                         "Error: Could not detect Project Wingman installation.\n\
                          Specify --install-path or set PW_INSTALL environment variable."
                     );
-                    std::process::exit(1);
+                    // C# parity: 412 = could not locate the game install folder
+                    std::process::exit(412);
                 }
             }
         }
@@ -1498,6 +1509,36 @@ fn cmd_combine(
 /// sidecars) from the game pak into a virtual file map, run the hex phase
 /// (all mods) then the asset phase (all mods), add any extra files, stage,
 /// and pack (V3, `../../../` mount). Returns (asset targets, total files).
+/// A build failure with a Project Sicario-compatible exit code. Vortex
+/// integrations surface these as specific dialogs:
+/// 404 = install dir missing, 412 = missing source file, 422 = bad patch.
+struct BuildFail {
+    code: i32,
+    msg: String,
+}
+
+impl BuildFail {
+    fn new(code: i32, msg: impl Into<String>) -> Self {
+        Self {
+            code,
+            msg: msg.into(),
+        }
+    }
+}
+
+impl From<String> for BuildFail {
+    fn from(msg: String) -> Self {
+        // Generic/unhandled errors keep the historical exit code.
+        Self { code: 1, msg }
+    }
+}
+
+impl std::fmt::Display for BuildFail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.msg)
+    }
+}
+
 fn build_pak_from_mods(
     game_paks: &std::path::Path,
     mods: &[&modman_core::manifest::WingmanMod],
@@ -1505,7 +1546,7 @@ fn build_pak_from_mods(
     out_dir: &std::path::Path,
     pak_name: &str,
     verbose: bool,
-) -> Result<(usize, usize, Vec<String>), String> {
+) -> Result<(usize, usize, Vec<String>), BuildFail> {
     let staging = out_dir.join("staging");
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
@@ -1571,8 +1612,13 @@ fn build_pak_from_mods(
 
     // Phase 1 (engine-major): hex patches for all mods, including the .uexp
     // length auto-correct.
-    modman_core::merge::apply_hex_phase(&mut files, mods)
-        .map_err(|e| format!("Hex patch error: {e}"))?;
+    modman_core::merge::apply_hex_phase(&mut files, mods).map_err(|e| {
+        let code = match e {
+            modman_core::apply::ApplyError::Asset(_) => 412,
+            _ => 422,
+        };
+        BuildFail::new(code, format!("Hex patch error: {e}"))
+    })?;
 
     // Phase 2: DataTable asset patches for all mods.
     let mut ok = 0usize;
@@ -1594,13 +1640,17 @@ fn build_pak_from_mods(
             modman_core::merge::resolve_target(&files, &uexp_needle).cloned(),
             modman_core::merge::resolve_target(&files, &uasset_needle).cloned(),
         ) else {
-            eprintln!("  Warning: no pak entries for '{target}'; skipped");
-            continue;
+            // C# parity: a patch targeting a file that isn't in the game
+            // aborts with 412 (SourceFileNotFoundException).
+            return Err(BuildFail::new(
+                412,
+                format!("no pak entries for '{target}' (patch targets a missing file)"),
+            ));
         };
         let uasset = files.get(&uasset_key).unwrap().clone();
         let uexp = files.get(&uexp_key).unwrap().clone();
         let merged = modman_core::merge::merge_mods(&uasset, &uexp, mods, target)
-            .map_err(|e| format!("Merge error on {target}: {e}"))?;
+            .map_err(|e| BuildFail::new(422, format!("Merge error on {target}: {e}")))?;
         if verbose {
             println!(
                 "  -> {} bytes uexp, {} bytes uasset",
@@ -1628,7 +1678,7 @@ fn build_pak_from_mods(
         std::fs::write(&out_path, bytes).map_err(|e| e.to_string())?;
     }
     if files.is_empty() {
-        return Err("No targets merged.".to_string());
+        return Err("No targets merged.".to_string().into());
     }
 
     let pak_out = out_dir.join(pak_name);
