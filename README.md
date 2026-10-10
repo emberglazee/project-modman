@@ -169,10 +169,14 @@ modman combine <pak-or-dir...> --install-path <game> --output <dir>
 
 ```
 crates/
-├── modman-core/       Data models, patch engine, merge pipeline, components
+├── modman-core/       Data models, patch engine, merge pipeline, components,
+│                      locres reader/writer
 ├── modman-uasset/     UE4 .uasset binary parser (standalone)
 ├── modman-pak/        PAK file operations (wraps repak)
-└── modman-cli/        CLI binary
+├── modman-cli/        CLI binary
+└── modman-wasm/       WebAssembly frontend (wasm-bindgen) powering the web UI
+
+web/                   GitHub Pages site: hosted page + offline single-file build
 ```
 
 ## License
