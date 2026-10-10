@@ -105,8 +105,10 @@ fn read_fstring(d: &[u8], off: &mut usize) -> Result<String, LocresError> {
             return Err(LocresError::Truncated("fstring utf16 body"));
         }
         let pairs: Vec<u16> = d[*off..*off + (n - 1) * 2]
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect();
         let s = String::from_utf16_lossy(&pairs);
         *off += n * 2;
@@ -307,13 +309,7 @@ impl LocresFile {
     pub fn to_csv(&self) -> String {
         let mut out = String::from("key,source,Translation\n");
         for (composite, _hash, text) in self.entries() {
-            let _ = writeln!(
-                out,
-                "{},{},{}",
-                csv_escape(&composite),
-                csv_escape(text),
-                ""
-            );
+            let _ = writeln!(out, "{},{},", csv_escape(&composite), csv_escape(text));
         }
         out
     }
