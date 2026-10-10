@@ -1055,17 +1055,17 @@ fn main() {
     }
 }
 
+/// Game path via auto-detection (used by `locres extract`).
+fn modman_cli_game_path() -> Option<String> {
+    crate::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
+}
+
 /// Keep the welcome screen readable after a double-click:
 /// - Windows: an exe started from Explorer owns a console with exactly one
 ///   attached process — pause so the window doesn't vanish.
 /// - macOS/Linux: a double-clicked binary gets a terminal (macOS always,
 ///   most Linux file managers when configured to) — pause when attached to
 ///   one so the window stays. Piped or scripted runs (no tty) never pause.
-/// Game path via auto-detection (used by `locres extract`).
-fn modman_cli_game_path() -> Option<String> {
-    crate::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
-}
-
 fn wait_if_double_clicked() {
     #[cfg(windows)]
     {
