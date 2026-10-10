@@ -12,6 +12,7 @@
   - [Web UI — no install needed](#web-ui--no-install-needed)
   - [Downloading & first run](#downloading--first-run)
 - [Translation mods (`.locres`)](#translation-mods-locres)
+- [Documentation](#documentation)
 - [Building](#building)
 - [Usage](#usage)
 - [Project Structure](#project-structure)
@@ -148,6 +149,17 @@ modman locres diff Original.locres Mod.locres --csv changes.csv --limit 40
 ```
 
 Drop the result into `~mods` — done.
+
+## Documentation
+
+In-depth guides live in [`docs/`](docs/README.md):
+
+- [**Merging conflicting mods**](docs/merging-mods.md) — the no-metadata merge,
+  conflict semantics, what can and can't merge, reading the report.
+- [**Translation mods**](docs/translation-mods.md) — the full `.locres` workflow,
+  the CSV format, tips, and binary format notes for tool authors.
+- [**FAQ**](docs/faq.md) — install paths, first-run warnings (SmartScreen,
+  Gatekeeper), merge conflicts, browser-page privacy.
 
 ## Building
 
