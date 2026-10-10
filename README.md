@@ -19,7 +19,7 @@ In-game acceptance passed (SPEAR Unlock + Improved Chimera verified in Project W
 
 ## V1 Scope — 1:1 parity with the Project Sicario merger
 
-**The v1 goal is 1:1 parity with the Sicario merger — no more, no less.**
+**The v1 goal is 1:1 parity with the Sicario merger — no less.**
 
 A drop-in replacement for the Sicario merger (`SicarioPatch.Loader`) against Project Wingman 2.1.1A / UE 4.27 / Pak V11:
 
@@ -42,7 +42,7 @@ Verified against the C# merger at byte level (oracle harness in `~/modding/proje
 | Components, parameters/inputs, engine-version gate, `GetLabel` | ✅ |
 | Merge report (`--report`) | ✅ byte-identical |
 | `preset-pack` | ✅ byte-identical output pak |
-| In-game acceptance | ✅ (user-verified) |
+| In-game acceptance | ✅ |
 
 **All known v1 parity gaps are closed.** `customSkins` skin-slot merging works with real
 PSM skin paks (`ProjectWingman/Content/Assets/Skins/<aircraft-row>/…`), live-verified in-game.
