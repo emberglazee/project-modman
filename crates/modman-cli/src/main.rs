@@ -13,8 +13,49 @@ struct Cli {
     command: Option<Commands>,
 }
 
+/// .locres subcommands
+#[derive(Subcommand)]
+enum LocresCmd {
+    /// Dump a .locres to the UEExtractor-compatible CSV (key,source,Translation)
+    Read {
+        /// Path to the .locres file
+        input: String,
+        /// Output CSV path (default: beside the input)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// Patch a .locres from a CSV — structure, hashes and order preserved
+    Patch {
+        /// The original .locres (from the game, e.g. extracted from pakchunk0)
+        locres: String,
+        /// The translations CSV (key,source,Translation)
+        csv: String,
+        /// Output path (default: <name>_patched.locres beside the input)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// Build a ready-to-install translation mod pak in one step
+    Pak {
+        /// The original .locres to patch
+        locres: String,
+        /// The translations CSV
+        csv: String,
+        /// Game language folder (e.g. en-US, ru-RU, ja, zh-CN)
+        #[arg(long)]
+        lang: String,
+        /// Output .pak path
+        #[arg(short, long)]
+        output: String,
+    },
+}
+
 #[derive(Subcommand)]
 enum Commands {
+    /// Work with .locres localization files (translation mods)
+    Locres {
+        #[command(subcommand)]
+        cmd: LocresCmd,
+    },
     /// Print .pak file info
     Info {
         /// Path to the .pak file
@@ -724,6 +765,126 @@ fn main() {
             if let Err(e) = cmd_patch(&input) {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
+            }
+        }
+        Some(Commands::Locres { cmd }) => {
+            use modman_core::locres::LocresFile;
+            match cmd {
+                LocresCmd::Read { input, output } => {
+                    let data = std::fs::read(&input)
+                        .map_err(|e| format!("{input}: {e}"))
+                        .unwrap_or_else(|e| {
+                            eprintln!("Error: {e}");
+                            std::process::exit(1);
+                        });
+                    let parsed = match LocresFile::parse(&data) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            eprintln!("Error: {input}: {e}");
+                            std::process::exit(1);
+                        }
+                    };
+                    let out = output.unwrap_or_else(|| {
+                        std::path::Path::new(&input)
+                            .with_extension("csv")
+                            .to_string_lossy()
+                            .to_string()
+                    });
+                    if let Err(e) = std::fs::write(&out, parsed.to_csv()) {
+                        eprintln!("Error writing {out}: {e}");
+                        std::process::exit(1);
+                    }
+                    println!(
+                        "{} -> {} ({} entries, {} namespaces, v{})",
+                        input,
+                        out,
+                        parsed.entry_count(),
+                        parsed.namespaces.len(),
+                        parsed.version.as_byte()
+                    );
+                }
+                LocresCmd::Patch {
+                    locres,
+                    csv,
+                    output,
+                } => {
+                    let data = std::fs::read(&locres).unwrap_or_else(|e| {
+                        eprintln!("Error: {locres}: {e}");
+                        std::process::exit(1);
+                    });
+                    let mut parsed = LocresFile::parse(&data).unwrap_or_else(|e| {
+                        eprintln!("Error: {locres}: {e}");
+                        std::process::exit(1);
+                    });
+                    let csv_text = std::fs::read_to_string(&csv).unwrap_or_else(|e| {
+                        eprintln!("Error: {csv}: {e}");
+                        std::process::exit(1);
+                    });
+                    let patched = parsed.patch_from_csv(&csv_text);
+                    let out = output.unwrap_or_else(|| {
+                        std::path::Path::new(&locres)
+                            .with_file_name(format!(
+                                "{}_patched.locres",
+                                std::path::Path::new(&locres)
+                                    .file_stem()
+                                    .map(|s| s.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| "locres".into())
+                            ))
+                            .to_string_lossy()
+                            .to_string()
+                    });
+                    if let Err(e) = std::fs::write(&out, parsed.write()) {
+                        eprintln!("Error writing {out}: {e}");
+                        std::process::exit(1);
+                    }
+                    println!("Patched {patched} translation(s) -> {out} (structure preserved)");
+                }
+                LocresCmd::Pak {
+                    locres,
+                    csv,
+                    lang,
+                    output,
+                } => {
+                    let data = std::fs::read(&locres).unwrap_or_else(|e| {
+                        eprintln!("Error: {locres}: {e}");
+                        std::process::exit(1);
+                    });
+                    let mut parsed = LocresFile::parse(&data).unwrap_or_else(|e| {
+                        eprintln!("Error: {locres}: {e}");
+                        std::process::exit(1);
+                    });
+                    let csv_text = std::fs::read_to_string(&csv).unwrap_or_else(|e| {
+                        eprintln!("Error: {csv}: {e}");
+                        std::process::exit(1);
+                    });
+                    let patched = parsed.patch_from_csv(&csv_text);
+                    let record = format!(
+                        "ProjectWingman/Content/Localization/ProjectWingman/{lang}/ProjectWingman.locres"
+                    );
+                    let staging = std::env::temp_dir().join("modman-locres-pak");
+                    let _ = std::fs::remove_dir_all(&staging);
+                    let file_path = staging.join(&record);
+                    if let Some(parent) = file_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    std::fs::write(&file_path, parsed.write()).unwrap_or_else(|e| {
+                        eprintln!("Error staging: {e}");
+                        std::process::exit(1);
+                    });
+                    if let Err(e) = modman_pak::pack(
+                        &staging,
+                        &output,
+                        modman_pak::Version::V3,
+                        "../../../".to_string(),
+                        None,
+                    ) {
+                        eprintln!("Error packing: {e}");
+                        std::process::exit(1);
+                    }
+                    println!(
+                        "Wrote {output} — {patched} translation(s) for language '{lang}' ({record})"
+                    );
+                }
             }
         }
         Some(Commands::Scan { path }) => {

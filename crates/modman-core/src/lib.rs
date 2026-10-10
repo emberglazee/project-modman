@@ -13,6 +13,7 @@ pub mod discovery;
 pub mod engine;
 pub mod fragment;
 pub mod hexpatch;
+pub mod locres;
 pub mod manifest;
 pub mod merge;
 pub mod objectref;
