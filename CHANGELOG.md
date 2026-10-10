@@ -1,5 +1,35 @@
 # Changelog
 
+## [v0.4.1] — 2026-10-10
+
+**Vortex-native.** The CLI is now a drop-in for the exact invocation GUI
+integrations issue (Project Sicario Manager's hook in Vortex), verified
+against the real PSM build — which surfaced and fixed two integration-level
+bugs that only appear when a Windows GUI drives the tool.
+
+### Project Sicario / Vortex compatibility
+- `--installPath` / `--outputPath` (camelCase) aliases and a
+  `--non-interactive` flag — the exact call shape Vortex extensions use.
+- C#-parity exit codes: 404 (install dir missing), 412 (a patch targets a
+  missing file — now fatal, matching `SourceFileNotFoundException`), 422
+  (patch application failure). Generic errors keep exit 1.
+- Quoted path values (`--installPath="C:\Game"`) are accepted — GUI
+  integrations spawn without a shell, so the quotes arrive literally.
+- The output folder now contains exactly `mergeReport.json` +
+  `SicarioMerge_P.pak`; the scratch `staging/` directory is no longer left
+  behind (in the Vortex flow it would have been deployed as junk files).
+- The no-args `build` discovers presets from `~mods`/`~presets` +
+  `Content/Presets` — covering both Vortex's deploy location and the C#
+  merger's directory.
+
+### Verification
+- Ran the real C# PSM (Linux build) with the exact invocation: identical
+  output shape; identical data + index bytes (one 1-byte diff in the
+  footer's legacy unused-count slot, no functional impact).
+- Ran the bundled Windows binary under Wine 11: a full merge produced a
+  **byte-identical** output to the native Linux binary
+  (`faa692a0…` sha256), confirming the Windows builds for integrations.
+
 ## [v0.4.0] — 2026-10-10
 
 **Translation modding.** Full `.locres` support — extract from the game,
