@@ -281,6 +281,39 @@ impl LocresFile {
         out
     }
 
+    /// Merge identical strings into single entries, summing their reference
+    /// counts and repointing every key (matches how community tools like
+    /// UEExtractor compact locres output). Not used by the patch path, which
+    /// preserves the game's original structure exactly.
+    pub fn dedup_strings(&mut self) {
+        use std::collections::HashMap;
+        let mut seen: HashMap<String, u32> = HashMap::new();
+        let mut new_strings: Vec<String> = Vec::new();
+        let mut new_refs: Vec<u32> = Vec::new();
+        let mut remap: Vec<u32> = Vec::with_capacity(self.strings.len());
+        for (i, text) in self.strings.iter().enumerate() {
+            let rc = self.ref_counts.get(i).copied().unwrap_or(1);
+            if let Some(&idx) = seen.get(text.as_str()) {
+                remap.push(idx);
+                new_refs[idx as usize] += rc;
+            } else {
+                let idx = new_strings.len() as u32;
+                seen.insert(text.clone(), idx);
+                new_strings.push(text.clone());
+                new_refs.push(rc);
+                remap.push(idx);
+            }
+        }
+        for ns in &mut self.namespaces {
+            for k in &mut ns.keys {
+                if let Some(&ni) = remap.get(k.string_index as usize) {
+                    k.string_index = ni;
+                }
+            }
+        }
+        self.strings = new_strings;
+        self.ref_counts = new_refs;
+    }
     /// Entry list with namespace-composite keys (UEExtractor's convention:
     /// `Namespace::Key`, or just `Key` when the namespace is empty).
     pub fn entries(&self) -> Vec<(String, u32, &str)> {
@@ -298,6 +331,37 @@ impl LocresFile {
                     .map(|s| s.as_str())
                     .unwrap_or("");
                 out.push((composite, k.source_hash, text));
+            }
+        }
+        out
+    }
+
+    /// Compare against another locres (e.g. the game's original vs a mod).
+    /// Entries are matched by their composite key; order is the modified
+    /// file's order, so output is deterministic.
+    pub fn diff(&self, other: &LocresFile) -> LocresDiff {
+        use std::collections::HashMap;
+        let mine: HashMap<String, String> = self
+            .entries()
+            .into_iter()
+            .map(|(k, _, text)| (k, text.to_string()))
+            .collect();
+        let mut out = LocresDiff::default();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (key, _hash, text) in other.entries() {
+            seen.insert(key.clone());
+            match mine.get(&key) {
+                Some(old) => {
+                    if old != text {
+                        out.changed.push((key, old.clone(), text.to_string()));
+                    }
+                }
+                None => out.added.push((key, text.to_string())),
+            }
+        }
+        for (key, _hash, text) in self.entries() {
+            if !seen.contains(&key) {
+                out.removed.push((key, text.to_string()));
             }
         }
         out
@@ -345,6 +409,23 @@ impl LocresFile {
         }
         self.strings = new_strings;
         patched
+    }
+}
+
+/// Differences between two locres files (matched by composite key).
+#[derive(Debug, Default)]
+pub struct LocresDiff {
+    /// (key, original text, modified text)
+    pub changed: Vec<(String, String, String)>,
+    /// (key, text) — present only in the modified file
+    pub added: Vec<(String, String)>,
+    /// (key, text) — present only in the original
+    pub removed: Vec<(String, String)>,
+}
+
+impl LocresDiff {
+    pub fn is_empty(&self) -> bool {
+        self.changed.is_empty() && self.added.is_empty() && self.removed.is_empty()
     }
 }
 
@@ -517,6 +598,51 @@ mod tests {
         let n = f.patch_from_csv(csv);
         assert_eq!(n, 1);
         assert_eq!(f.strings[0], "Перевод строки");
+    }
+
+    #[test]
+    fn dedup_merges_identical_strings() {
+        let mut f = sample();
+        f.strings = vec!["same".into(), "same".into(), "other".into()];
+        f.ref_counts = vec![2, 3, 1];
+        f.namespaces[0].keys[0].string_index = 0;
+        f.namespaces[0].keys[1].string_index = 1;
+        f.namespaces[1].keys[0].string_index = 2;
+        f.dedup_strings();
+        assert_eq!(f.strings, vec!["same".to_string(), "other".to_string()]);
+        assert_eq!(f.ref_counts, vec![5, 1]);
+        assert_eq!(f.namespaces[0].keys[0].string_index, 0);
+        assert_eq!(f.namespaces[0].keys[1].string_index, 0);
+        assert_eq!(f.namespaces[1].keys[0].string_index, 1);
+        // and it still round-trips
+        let bytes = f.write();
+        assert_eq!(LocresFile::parse(&bytes).unwrap().write(), bytes);
+    }
+
+    #[test]
+    fn diff_reports_changes() {
+        let a = sample();
+        let mut b = sample();
+        b.strings[0] = ":3".into(); // changed
+        b.namespaces[1].keys[0].string_index = 0; // ...and the third entry now points at index 0 => value ":3"
+        let d = a.diff(&b);
+        assert_eq!(d.added.len(), 0);
+        assert_eq!(d.removed.len(), 0);
+        // key1 changed (:3), key3 changed (repounted to index 0)
+        assert_eq!(d.changed.len(), 2);
+        assert!(d
+            .changed
+            .iter()
+            .any(|(k, _, new)| k.starts_with("AABB") && new == ":3"));
+
+        // added/removed
+        let mut c = sample();
+        c.namespaces[0].keys.pop();
+        let d2 = a.diff(&c);
+        assert_eq!(d2.removed.len(), 1);
+        assert_eq!(d2.added.len(), 0);
+        let d3 = c.diff(&a);
+        assert_eq!(d3.added.len(), 1);
     }
 
     #[test]

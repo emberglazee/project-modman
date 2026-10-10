@@ -124,6 +124,12 @@ modman locres read ProjectWingman.locres -o translations.csv
 
 # 4) Build a ready-to-install translation mod in one step
 modman locres pak ProjectWingman.locres translations.csv --lang en-US -o MyTranslation_P.pak
+#    (--dedup merges identical strings, matching other community tools — a
+#    rebuild of an existing mod comes out byte-identical to it, verified
+#    against the ":3" mod)
+
+# Bonus: see exactly what a mod changes vs the game
+modman locres diff Original.locres Mod.locres --csv changes.csv --limit 40
 ```
 
 Drop the result into `~mods` — done.

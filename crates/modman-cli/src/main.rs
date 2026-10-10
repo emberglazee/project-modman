@@ -52,6 +52,19 @@ enum LocresCmd {
         #[arg(short, long)]
         output: Option<String>,
     },
+    /// Show what changed between two locres files (e.g. game vs mod)
+    Diff {
+        /// The original .locres (usually the game's)
+        original: String,
+        /// The modified .locres (a mod's)
+        modified: String,
+        /// Write every difference to a CSV (key,original,changed)
+        #[arg(long)]
+        csv: Option<String>,
+        /// Max entries shown on the console (default 20)
+        #[arg(long)]
+        limit: Option<usize>,
+    },
     /// Build a ready-to-install translation mod pak in one step
     Pak {
         /// The original .locres to patch
@@ -64,6 +77,10 @@ enum LocresCmd {
         /// Output .pak path
         #[arg(short, long)]
         output: String,
+        /// Merge identical strings into single entries (compact output,
+        /// matching other community tools)
+        #[arg(long)]
+        dedup: bool,
     },
 }
 
@@ -887,6 +904,110 @@ fn main() {
                     }
                     println!("Extracted {extracted} file(s).");
                 }
+                LocresCmd::Diff {
+                    original,
+                    modified,
+                    csv,
+                    limit,
+                } => {
+                    let load = |path: &str| -> modman_core::locres::LocresFile {
+                        let data = std::fs::read(path).unwrap_or_else(|e| {
+                            eprintln!("Error: {path}: {e}");
+                            std::process::exit(1);
+                        });
+                        modman_core::locres::LocresFile::parse(&data).unwrap_or_else(|e| {
+                            eprintln!("Error: {path}: {e}");
+                            std::process::exit(1);
+                        })
+                    };
+                    let a = load(&original);
+                    let b = load(&modified);
+                    let d = a.diff(&b);
+                    println!("original: {original}");
+                    println!(
+                        "          {} entries, {} namespaces, v{}",
+                        a.entry_count(),
+                        a.namespaces.len(),
+                        a.version.as_byte()
+                    );
+                    println!("modified: {modified}");
+                    println!(
+                        "          {} entries, {} namespaces, v{}",
+                        b.entry_count(),
+                        b.namespaces.len(),
+                        b.version.as_byte()
+                    );
+                    println!();
+                    if d.is_empty() {
+                        println!("No differences — every entry is identical.");
+                    } else {
+                        println!(
+                            "Changed: {} | Added: {} | Removed: {}",
+                            d.changed.len(),
+                            d.added.len(),
+                            d.removed.len()
+                        );
+                        let cap = limit.unwrap_or(20);
+                        let mut shown = 0usize;
+                        for (key, old, new) in &d.changed {
+                            if shown >= cap {
+                                break;
+                            }
+                            println!("  ~ {key}");
+                            println!("      - {old}");
+                            println!("      + {new}");
+                            shown += 1;
+                        }
+                        for (key, text) in &d.added {
+                            if shown >= cap {
+                                break;
+                            }
+                            println!("  + {key}: {text}");
+                            shown += 1;
+                        }
+                        for (key, text) in &d.removed {
+                            if shown >= cap {
+                                break;
+                            }
+                            println!("  - {key}: {text}");
+                            shown += 1;
+                        }
+                        let total = d.changed.len() + d.added.len() + d.removed.len();
+                        if total > shown {
+                            println!("  ... and {} more (use --csv to get all)", total - shown);
+                        }
+                    }
+                    if let Some(path) = csv {
+                        let mut out = String::from("key,original,changed\n");
+                        for (key, old, new) in &d.changed {
+                            out.push_str(&format!(
+                                "{},{},{}\n",
+                                modman_core::locres::csv_escape(key),
+                                modman_core::locres::csv_escape(old),
+                                modman_core::locres::csv_escape(new)
+                            ));
+                        }
+                        for (key, new) in &d.added {
+                            out.push_str(&format!(
+                                "{},,{}\n",
+                                modman_core::locres::csv_escape(key),
+                                modman_core::locres::csv_escape(new)
+                            ));
+                        }
+                        for (key, old) in &d.removed {
+                            out.push_str(&format!(
+                                "{},{},\n",
+                                modman_core::locres::csv_escape(key),
+                                modman_core::locres::csv_escape(old)
+                            ));
+                        }
+                        if let Err(e) = std::fs::write(&path, out) {
+                            eprintln!("Error writing {path}: {e}");
+                            std::process::exit(1);
+                        }
+                        println!("Differences written to {path}");
+                    }
+                }
                 LocresCmd::Read { input, output } => {
                     let data = std::fs::read(&input)
                         .map_err(|e| format!("{input}: {e}"))
@@ -961,6 +1082,7 @@ fn main() {
                     csv,
                     lang,
                     output,
+                    dedup,
                 } => {
                     let data = std::fs::read(&locres).unwrap_or_else(|e| {
                         eprintln!("Error: {locres}: {e}");
@@ -975,6 +1097,9 @@ fn main() {
                         std::process::exit(1);
                     });
                     let patched = parsed.patch_from_csv(&csv_text);
+                    if dedup {
+                        parsed.dedup_strings();
+                    }
                     let record = format!(
                         "ProjectWingman/Content/Localization/ProjectWingman/{lang}/ProjectWingman.locres"
                     );
