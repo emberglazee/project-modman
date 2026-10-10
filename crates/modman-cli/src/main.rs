@@ -16,6 +16,24 @@ struct Cli {
 /// .locres subcommands
 #[derive(Subcommand)]
 enum LocresCmd {
+    /// Extract locres files straight from the game's pak (step one)
+    Extract {
+        /// Game install path (defaults to auto-detection; PW_INSTALL wins)
+        #[arg(long)]
+        install_path: Option<String>,
+        /// Read from this pak instead of the game's pakchunk0
+        #[arg(long)]
+        pak: Option<String>,
+        /// Only this language (e.g. en-US); default: every language found
+        #[arg(long)]
+        lang: Option<String>,
+        /// Write translator CSVs instead of raw .locres files
+        #[arg(long)]
+        csv: bool,
+        /// Output file (with --lang) or directory (all languages; default: .)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
     /// Dump a .locres to the UEExtractor-compatible CSV (key,source,Translation)
     Read {
         /// Path to the .locres file
@@ -770,6 +788,105 @@ fn main() {
         Some(Commands::Locres { cmd }) => {
             use modman_core::locres::LocresFile;
             match cmd {
+                LocresCmd::Extract {
+                    install_path,
+                    pak,
+                    lang,
+                    csv,
+                    output,
+                } => {
+                    // Resolve the pak: explicit --pak, else the game's pakchunk0.
+                    let pak_path = match pak {
+                        Some(p) => std::path::PathBuf::from(p),
+                        None => {
+                            let game = install_path
+                                .clone()
+                                .or_else(|| modman_cli_game_path())
+                                .unwrap_or_else(|| {
+                                    eprintln!(
+                                        "Error: Could not detect Project Wingman. \n\
+                                         Specify --install-path, --pak, or set PW_INSTALL."
+                                    );
+                                    std::process::exit(1);
+                                });
+                            resolve_paks_dir(&game).join("pakchunk0-WindowsNoEditor.pak")
+                        }
+                    };
+                    let archive = modman_pak::PakArchive::open(&pak_path).unwrap_or_else(|e| {
+                        eprintln!("Error opening {}: {e}", pak_path.display());
+                        std::process::exit(1);
+                    });
+                    let wanted: Vec<String> = archive
+                        .files()
+                        .into_iter()
+                        .filter(|f| {
+                            f.ends_with(".locres") && f.contains("Localization/ProjectWingman/")
+                        })
+                        .collect();
+                    let mut extracted = 0usize;
+                    for entry in &wanted {
+                        let Some(lang_name) = entry.split('/').rev().nth(1) else {
+                            continue;
+                        };
+                        if let Some(only) = &lang {
+                            if !lang_name.eq_ignore_ascii_case(only) {
+                                continue;
+                            }
+                        }
+                        let data = match archive.read_entry(entry) {
+                            Ok(d) => d,
+                            Err(e) => {
+                                eprintln!("  {entry}: {e}");
+                                continue;
+                            }
+                        };
+                        let contents = if csv {
+                            let parsed = match modman_core::locres::LocresFile::parse(&data) {
+                                Ok(p) => p,
+                                Err(e) => {
+                                    eprintln!("  {entry}: parse: {e}");
+                                    continue;
+                                }
+                            };
+                            parsed.to_csv().into_bytes()
+                        } else {
+                            data
+                        };
+                        let ext = if csv { "csv" } else { "locres" };
+                        let file_name = format!("{lang_name}_ProjectWingman.{ext}");
+                        // With --lang: -o is the output file. Otherwise: a dir.
+                        let out_path = match (&output, lang.is_some()) {
+                            (Some(o), true) => std::path::PathBuf::from(o),
+                            (Some(o), false) => std::path::PathBuf::from(o).join(&file_name),
+                            (None, _) => std::path::PathBuf::from(".").join(&file_name),
+                        };
+                        if let Some(parent) = out_path.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        if let Err(e) = std::fs::write(&out_path, &contents) {
+                            eprintln!("  {}: {e}", out_path.display());
+                            continue;
+                        }
+                        println!(
+                            "{} -> {} ({} bytes)",
+                            entry,
+                            out_path.display(),
+                            contents.len()
+                        );
+                        extracted += 1;
+                    }
+                    if extracted == 0 {
+                        eprintln!(
+                            "No locres files {}found in {}",
+                            lang.as_ref()
+                                .map(|l| format!("for language '{l}' "))
+                                .unwrap_or_default(),
+                            pak_path.display()
+                        );
+                        std::process::exit(1);
+                    }
+                    println!("Extracted {extracted} file(s).");
+                }
                 LocresCmd::Read { input, output } => {
                     let data = std::fs::read(&input)
                         .map_err(|e| format!("{input}: {e}"))
@@ -944,6 +1061,11 @@ fn main() {
 /// - macOS/Linux: a double-clicked binary gets a terminal (macOS always,
 ///   most Linux file managers when configured to) — pause when attached to
 ///   one so the window stays. Piped or scripted runs (no tty) never pause.
+/// Game path via auto-detection (game.rs) — used by locres extract.
+fn modman_cli_game_path() -> Option<String> {
+    crate::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
+}
+
 fn wait_if_double_clicked() {
     #[cfg(windows)]
     {

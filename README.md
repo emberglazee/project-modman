@@ -110,20 +110,23 @@ miss. (Verified: parse → write reproduces all nine shipped language files
 byte-for-byte.)
 
 ```bash
-# 1) Dump a locres to a translator-friendly CSV (key,source,Translation)
+# 1) Pull the language file straight out of the game's pak
+#    (finds the install automatically; --pak <file> to use another pak)
+modman locres extract --lang en-US -o ProjectWingman.locres
+#    ...or go straight to the spreadsheet: add --csv
+#    ...or omit --lang to dump every language at once
+
+# 2) Dump a locres to a translator-friendly CSV (key,source,Translation)
 modman locres read ProjectWingman.locres -o translations.csv
 
-# 2) Translate the third column — the CSV matches the UEExtractor format,
+# 3) Translate the third column — the CSV matches the UEExtractor format,
 #    so the existing translator tooling and workflows apply as-is
 
-# 3) Build a ready-to-install translation mod in one step
+# 4) Build a ready-to-install translation mod in one step
 modman locres pak ProjectWingman.locres translations.csv --lang en-US -o MyTranslation_P.pak
 ```
 
-Drop the result into `~mods`. Extract the source locres from your game's pak with
-`modman locres read` on the file obtained via `modman unpack`, or use
-`cargo run -p modman-pak --example extract_locres` (repo checkout) to pull all
-languages at once.
+Drop the result into `~mods` — done.
 
 ## Building
 
