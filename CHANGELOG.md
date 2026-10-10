@@ -1,5 +1,38 @@
 # Changelog
 
+## [v0.4.0] — 2026-10-10
+
+**Translation modding.** Full `.locres` support — extract from the game,
+translate a CSV, build a ready-to-install mod — plus comfort fixes and a
+proper link embed for sharing.
+
+### Localization (`.locres`)
+- `modman locres extract` — pull language files straight from the game's
+  pak (single language, `--csv` straight to the spreadsheet, or all nine
+  at once).
+- `modman locres read` — dump to the UEExtractor-compatible CSV
+  (`key,source,Translation`), so existing translator tooling applies as-is.
+- `modman locres patch` / `pak` — rebuild with every namespace/key hash,
+  entry order and string reference count preserved, staged at
+  `ProjectWingman/Content/Localization/ProjectWingman/<lang>/` as a
+  drop-in mod. `--dedup` compacts identical strings like other tools do.
+- `modman locres diff` — see exactly what a mod changes versus the game,
+  with before/after previews and a full CSV export.
+- Fidelity gates: parse → write reproduces **all nine shipped language
+  files byte-for-byte** (10,553 entries for `en`); rebuilding the ":3" joke
+  mod through the pipeline produces a **byte-identical** file to the
+  original modder's; a partial translation was **verified in-game**
+  (patched menu entries change, everything else untouched).
+
+### Comfort & polish
+- Game auto-detection now covers modern Linux Steam (`~/.local/share`),
+  Flatpak and native Windows paths; `PW_INSTALL` takes precedence.
+- Double-clicking the binary shows a readable welcome screen (pauses when
+  opened from a file manager, never in scripts) pointing at the browser
+  and offline options.
+- The web page has a proper link embed (og/twitter metadata + a 1200×630
+  preview card).
+
 ## [v0.3.0] — 2026-10-10
 
 **Community-hardened.** Real Frontline-59 skin mods (the K-9 liveries) exposed
