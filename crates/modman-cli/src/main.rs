@@ -137,9 +137,12 @@ enum Commands {
     },
     /// Build a merged mod from Sicario patch files (drop-in replacement for Sicario CLI)
     Build {
-        /// Paths to preset/mod files or directories
+        /// Paths to preset/mod files or directories (wildcards like `*.pak` work
+        /// even in cmd.exe, which leaves them unexpanded for native executables)
         preset_paths: Vec<String>,
-        /// Path to the game install directory (auto-detected if omitted)
+        /// Path to the game install folder (the folder containing 'ProjectWingman';
+        /// auto-detected if omitted). Paths from inside the game tree are walked
+        /// back out with a note
         #[arg(long, alias = "installPath")]
         install_path: Option<String>,
         /// Write the merged mod (SicarioMerge_P.pak) to this directory; omit for a preview
@@ -176,7 +179,9 @@ enum Commands {
     /// Combine conflicting override mods (no Sicario metadata needed): merges
     /// datatable overrides structurally (later mods win conflicts) into one pak
     Combine {
-        /// Pak files (or directories of paks) to combine, in load-priority order
+        /// Pak files (or directories of paks) to combine, in load-priority order.
+        /// Wildcards like `~mods\*.pak` work even in cmd.exe, which leaves them
+        /// unexpanded for native executables
         paks: Vec<String>,
         /// Path to the game install directory (auto-detected if omitted)
         #[arg(long)]
@@ -343,6 +348,20 @@ fn main() {
             let install_path = install_path.as_deref().map(unquote).map(str::to_string);
             let output = output.as_deref().map(unquote).map(str::to_string);
             let report = report.as_deref().map(unquote).map(str::to_string);
+            let (install_path, path_fix_note) = match install_path {
+                Some(p) => {
+                    let (fixed, note) = normalize_install_path(&p);
+                    (Some(fixed), note)
+                }
+                None => (None, None),
+            };
+            if let Some(note) = &path_fix_note {
+                eprintln!("{note}");
+            }
+            let preset_paths: Vec<String> = preset_paths
+                .iter()
+                .flat_map(|p| expand_glob_arg(p))
+                .collect();
             // Determine game path
             let game_path = install_path.clone().or_else(|| {
                 crate::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
@@ -794,6 +813,17 @@ fn main() {
         }) => {
             let install_path = install_path.as_deref().map(unquote).map(str::to_string);
             let output = output.as_deref().map(unquote).map(str::to_string);
+            let (install_path, path_fix_note) = match install_path {
+                Some(p) => {
+                    let (fixed, note) = normalize_install_path(&p);
+                    (Some(fixed), note)
+                }
+                None => (None, None),
+            };
+            if let Some(note) = &path_fix_note {
+                eprintln!("{note}");
+            }
+            let paks: Vec<String> = paks.iter().flat_map(|p| expand_glob_arg(p)).collect();
             let game_path = install_path.clone().or_else(|| {
                 crate::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
             });
@@ -1528,6 +1558,113 @@ fn unquote(s: &str) -> &str {
     s.trim_matches('"')
 }
 
+/// Case-insensitive `*` / `?` wildcard matcher (Windows-style semantics).
+fn wildcard_match(pattern: &str, name: &str) -> bool {
+    let p: Vec<char> = pattern.to_lowercase().chars().collect();
+    let s: Vec<char> = name.to_lowercase().chars().collect();
+    let (mut pi, mut si) = (0usize, 0usize);
+    let (mut star, mut mark) = (usize::MAX, 0usize);
+    while si < s.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == s[si]) {
+            pi += 1;
+            si += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = pi;
+            mark = si;
+            pi += 1;
+        } else if star != usize::MAX {
+            pi = star + 1;
+            mark += 1;
+            si = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+/// Expand simple wildcards in a command-line path argument. cmd.exe and
+/// PowerShell do not expand globs for native executables, so `~mods\*.pak`
+/// arrives here as the literal pattern; expand it against the directory.
+/// Anything unexpandable is returned unchanged so normal error reporting
+/// still has a path to name.
+fn expand_glob_arg(arg: &str) -> Vec<String> {
+    if !arg.contains('*') && !arg.contains('?') {
+        return vec![arg.to_string()];
+    }
+    let Some(sep_idx) = arg.rfind(['/', '\\']) else {
+        return vec![arg.to_string()];
+    };
+    let (dir, pattern) = arg.split_at(sep_idx + 1);
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return vec![arg.to_string()];
+    };
+    let mut matches: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| wildcard_match(pattern, name))
+        .map(|name| format!("{dir}{name}"))
+        .collect();
+    matches.sort();
+    if matches.is_empty() {
+        vec![arg.to_string()]
+    } else {
+        matches
+    }
+}
+
+/// The game folder is the one containing `ProjectWingman`. When the user
+/// points `--install-path` at something *inside* it (a pak file, `Paks\`,
+/// `Content\`, or the `ProjectWingman` folder itself — a common mistake),
+/// walk back out to the game folder, explain, and continue with it.
+fn normalize_install_path(raw: &str) -> (String, Option<String>) {
+    // Work at the string level with both separators: a Windows path handed to
+    // the Linux CLI (or vice versa in tests) must still resolve, and std::path
+    // only treats one separator as such depending on the build platform.
+    let bytes = raw.as_bytes();
+    let mut end = raw.len();
+    while end > 0 && (bytes[end - 1] == b'/' || bytes[end - 1] == b'\\') {
+        end -= 1;
+    }
+    loop {
+        let (start, had_sep) = match raw[..end].rfind(['/', '\\']) {
+            Some(sep) => (sep + 1, true),
+            None => (0, false),
+        };
+        let comp = &raw[start..end];
+        if comp.eq_ignore_ascii_case("ProjectWingman") {
+            // the game folder is everything before the marker component
+            let mut r = start;
+            while r > 0 && (bytes[r - 1] == b'/' || bytes[r - 1] == b'\\') {
+                r -= 1;
+            }
+            let root = if r == 0 {
+                ".".to_string()
+            } else {
+                raw[..r].to_string()
+            };
+            if root == raw {
+                return (raw.to_string(), None);
+            }
+            let note = format!(
+                "Note: --install-path should point at the game folder (the folder that contains 'ProjectWingman'), not a file or folder inside it.\n      Got:   {raw}\n      Using: {root}\n      Continuing with the corrected path."
+            );
+            return (root, Some(note));
+        }
+        if !had_sep {
+            break;
+        }
+        end = start - 1;
+        while end > 0 && (bytes[end - 1] == b'/' || bytes[end - 1] == b'\\') {
+            end -= 1;
+        }
+    }
+    (raw.to_string(), None)
+}
+
 struct BuildFail {
     code: i32,
     msg: String,
@@ -1772,4 +1909,62 @@ fn write_report(
     }
     s.push_str("\n}");
     std::fs::write(path, s).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wildcard_basics() {
+        assert!(wildcard_match("*.pak", "F59_Skins_P.pak"));
+        assert!(wildcard_match("*.PAK", "mod.pak")); // case-insensitive
+        assert!(wildcard_match("*_P.pak", "SecondLevelMod_P.pak"));
+        assert!(wildcard_match("mod?.pak", "mod1.pak"));
+        assert!(!wildcard_match("mod?.pak", "mod12.pak"));
+        assert!(!wildcard_match("*.pak", "readme.txt"));
+        assert!(wildcard_match("*", "anything"));
+        assert!(wildcard_match("exact.pak", "exact.pak"));
+    }
+
+    #[test]
+    fn install_path_inside_game_tree_is_walked_out() {
+        // the reported mistake: the pak file itself
+        let (fixed, note) =
+            normalize_install_path(r".\ProjectWingman\Content\Paks\pakchunk0-WindowsNoEditor.pak");
+        assert_eq!(fixed, ".");
+        assert!(note.unwrap().contains("game folder"));
+
+        // Windows-style absolute, the Paks dir
+        let (fixed, _) =
+            normalize_install_path(r"C:\Games\Project Wingman\ProjectWingman\Content\Paks");
+        assert_eq!(fixed, r"C:\Games\Project Wingman");
+
+        // the ProjectWingman folder itself
+        let (fixed, _) = normalize_install_path(r"C:\Games\Project Wingman\ProjectWingman");
+        assert_eq!(fixed, r"C:\Games\Project Wingman");
+    }
+
+    #[test]
+    fn install_path_correct_values_untouched() {
+        // the correct game folder (note: outer folder shares the name, inner is the marker)
+        let cases = [
+            r"C:\Games\Project Wingman",
+            r"C:\SteamLibrary\steamapps\common\Project Wingman",
+            "/home/u/.local/share/Steam/steamapps/common/Project Wingman",
+        ];
+        for c in cases {
+            let (fixed, note) = normalize_install_path(c);
+            assert_eq!(fixed, c, "should be untouched: {c}");
+            assert!(note.is_none());
+        }
+    }
+
+    #[test]
+    fn install_path_outer_named_like_game_still_resolved() {
+        // folder literally named "ProjectWingman" containing the tree
+        let (fixed, _) =
+            normalize_install_path(r"C:\Games\ProjectWingman\ProjectWingman\Content\Paks");
+        assert_eq!(fixed, r"C:\Games\ProjectWingman");
+    }
 }

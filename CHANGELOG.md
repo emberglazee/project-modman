@@ -1,5 +1,20 @@
 # Changelog
 
+## [v0.4.2] — 2026-10-11
+
+**Friendlier on the command line.** A community report walked into two
+ways `--install-path` and wildcards surprise people; both are now handled.
+
+### Fixes
+- `--install-path` pointed at a file or folder *inside* the game tree
+  (a `.pak`, `Paks\`, `Content\`, or the `ProjectWingman` folder itself)
+  now walks back out to the game folder, explains what it did, and runs —
+  instead of failing with an I/O error.
+- Wildcards (`~mods\*.pak`) are expanded by modman itself, so they work
+  in cmd.exe and PowerShell (which don't expand globs for native
+  executables) as well as in real shells.
+- Both fixes apply to `combine` and `build`; the help texts now say so.
+
 ## [v0.4.1] — 2026-10-10
 
 **Vortex-native.** The CLI is now a drop-in for the exact invocation GUI
