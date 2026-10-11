@@ -11,9 +11,46 @@ use std::rc::Rc;
 
 use modman_core::combine::{combine_sources, PakSource};
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
+
+/// Print to the browser console (js_sys-only, no web-sys dependency).
+fn console_error(msg: &str) {
+    let global = js_sys::global();
+    if let Ok(console) = js_sys::Reflect::get(&global, &"console".into()) {
+        if let Ok(err) = js_sys::Reflect::get(&console, &"error".into()) {
+            if let Some(f) = err.dyn_ref::<js_sys::Function>() {
+                let _ = f.call1(&console, &JsValue::from_str(msg));
+            }
+        }
+    }
+}
+
+/// Report panics with their real message instead of a bare
+/// "unreachable executed" trap; users can then paste the console line into
+/// a bug report and we can act on it.
+#[wasm_bindgen(start)]
+pub fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        console_error(&format!(
+            "modman-wasm panicked: {info}\n\
+             (please report this with the mod names used at \
+             https://github.com/emberglazee/project-modman/issues)"
+        ));
+    }));
+}
+
+fn panic_message(e: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = e.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = e.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else {
+        "unknown panic".to_string()
+    }
+}
 
 /// Provided byte regions of the game pak, sorted by offset.
-type RegionMap = Rc<RefCell<Vec<(u64, Vec<u8>)>>>;
+type RegionMap = Rc<RefCell<Vec<(u64, Rc<Vec<u8>>)>>>;
 /// The range the sparse reader is currently missing (if any).
 type MissingSlot = Rc<RefCell<Option<(u64, u64)>>>;
 
@@ -22,13 +59,13 @@ type MissingSlot = Rc<RefCell<Option<(u64, u64)>>>;
 /// missing range, so the JS side can fetch it and retry.
 struct SparseReader {
     size: u64,
-    regions: Vec<(u64, Vec<u8>)>,
+    regions: Vec<(u64, Rc<Vec<u8>>)>,
     missing: MissingSlot,
     pos: u64,
 }
 
 impl SparseReader {
-    fn whole(bytes: Vec<u8>) -> Self {
+    fn whole(bytes: Rc<Vec<u8>>) -> Self {
         let size = bytes.len() as u64;
         SparseReader {
             size,
@@ -129,7 +166,7 @@ fn map_err(e: repak::Error) -> MergeErr {
 /// done. All state lives here between JS calls.
 #[wasm_bindgen]
 pub struct MergeSession {
-    mods: Vec<(String, Vec<u8>)>,
+    mods: Vec<(String, Rc<Vec<u8>>)>,
     game_size: u64,
     regions: RegionMap,
     missing: MissingSlot,
@@ -149,7 +186,9 @@ impl MergeSession {
 
     /// Add a mod pak (label = filename shown in the report).
     pub fn add_mod(&mut self, label: String, bytes: Vec<u8>) {
-        self.mods.push((label, bytes));
+        // Rc so the per-merge readers share these bytes instead of cloning
+        // them (halves peak memory for big mod paks in the browser).
+        self.mods.push((label, Rc::new(bytes)));
     }
 
     /// Tell the session how big the game pak is (bytes).
@@ -161,7 +200,7 @@ impl MergeSession {
     pub fn provide(&mut self, offset: f64, bytes: Vec<u8>) {
         let off = offset as u64;
         let mut regions = self.regions.borrow_mut();
-        regions.push((off, bytes));
+        regions.push((off, Rc::new(bytes)));
         // Keep regions sorted by offset for deterministic lookup.
         regions.sort_by_key(|(o, _)| *o);
     }
@@ -171,7 +210,20 @@ impl MergeSession {
     ///   {status:"done", pak: Uint8Array, report: <json string>}
     pub fn step(&mut self) -> Result<JsValue, JsValue> {
         *self.missing.borrow_mut() = None;
-        match self.try_merge() {
+        // Contain internal panics: the page gets a readable error (with the
+        // panic message once the hook above has logged it) instead of a bare
+        // wasm trap, and the session stays usable.
+        let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.try_merge()));
+        let attempt = match attempt {
+            Ok(r) => r,
+            Err(panic) => {
+                return Err(JsValue::from_str(&format!(
+                    "internal error: {} (details were logged to the browser console)",
+                    panic_message(panic)
+                )));
+            }
+        };
+        match attempt {
             Ok((pak, report)) => {
                 let obj = js_sys::Object::new();
                 let _ = js_sys::Reflect::set(&obj, &"status".into(), &"done".into());

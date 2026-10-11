@@ -142,7 +142,10 @@ async function runMerge() {
       break;
     }
   } catch (e) {
-    setError(`Merge failed: ${e}`);
+    setError(`Merge failed: ${e}
+
+This is a bug — the browser console (F12) now logs which internal step failed, and that line is what helps us fix it: github.com/emberglazee/project-modman/issues
+If the console mentions memory: close other tabs, reload, and retry — very large mod collections may need the modman CLI instead.`);
   } finally {
     mergeBtn.disabled = false;
     refreshUi();

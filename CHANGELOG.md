@@ -1,5 +1,28 @@
 # Changelog
 
+## [v0.4.3] — 2026-10-11
+
+**Web page hardening.** A community report of `RuntimeError: unreachable
+executed` — a Rust panic trapped inside WebAssembly, with the browser
+hiding the actual message — drove three fixes to the browser build:
+
+### Web (wasm) fixes
+- Panics now log their real message and location to the browser console
+  via a panic hook, so reports say *what* failed instead of a bare trap.
+- Internal panics are contained with `catch_unwind`: the page shows a
+  readable "internal error: …" message and keeps working instead of dying
+  with a bare unreachable trap.
+- The merge session now shares mod-pak bytes via `Rc` instead of cloning
+  them per merge — halving peak memory for large mods (the browser's wasm
+  memory ceiling is the likeliest trigger for the reported trap).
+- The page's error box now explains the console + memory hints and points
+  at the issue tracker.
+
+### Verification
+- The single-file page re-ran the full file:// acceptance merge of
+  E5Table + SecondLevelMod against the real game pak: output
+  **byte-identical** to the recorded reference (`5bb7882d…`).
+
 ## [v0.4.2] — 2026-10-11
 
 **Friendlier on the command line.** A community report walked into two
