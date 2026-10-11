@@ -1,5 +1,19 @@
 # Changelog
 
+## [v0.4.4] — 2026-10-11
+
+**Datatable-only merges.** A new switch for people whose conflicts are in
+the data, not the visuals.
+
+### New
+- `modman combine --datatables-only`: the output contains only the game's
+  DataTable files (merged; unmergeable ones keep the last override's pair,
+  as always). Textures, audio, meshes and loose files are left out of the
+  output entirely, and the report counts what was excluded — so a merged
+  table mod can coexist with the original skin/visual mods instead of
+  swallowing them. Useful for keeping outputs small and letting visual
+  mods keep loading on their own.
+
 ## [v0.4.3] — 2026-10-11
 
 **Web page hardening.** A community report of `RuntimeError: unreachable

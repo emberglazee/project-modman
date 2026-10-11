@@ -952,10 +952,28 @@ pub struct CombineOutcome {
 /// Combine conflicting override mods over a vanilla base: three-way
 /// datatable merges (later mods win), single-winner pass-through for
 /// everything else. This is the full orchestration both frontends share.
+/// Combine behavior switches.
+#[derive(Default, Clone, Copy, Debug)]
+pub struct CombineOptions {
+    /// Emit only the game's DataTable files (merged, or last-version
+    /// fallback when unmergeable). Every pass-through file — textures,
+    /// audio, meshes, loose files — is left out of the output.
+    pub datatables_only: bool,
+}
+
 pub fn combine_sources(
     base: &dyn PakSource,
     mods: &[&dyn PakSource],
     labels: &[String],
+) -> Result<CombineOutcome, ApplyError> {
+    combine_sources_with(base, mods, labels, &CombineOptions::default())
+}
+
+pub fn combine_sources_with(
+    base: &dyn PakSource,
+    mods: &[&dyn PakSource],
+    labels: &[String],
+    options: &CombineOptions,
 ) -> Result<CombineOutcome, ApplyError> {
     let base_mount = base.mount_point();
     let base_files: Vec<String> = base
@@ -1117,8 +1135,17 @@ pub fn combine_sources(
             }
         }
     }
-    for (path, (_, bytes)) in &passthrough {
-        files.insert(path.clone(), bytes.clone());
+    if options.datatables_only {
+        let dropped = passthrough.len();
+        if dropped > 0 {
+            warnings.push(format!(
+                "excluded {dropped} non-datatable file(s) (--datatables-only)"
+            ));
+        }
+    } else {
+        for (path, (_, bytes)) in &passthrough {
+            files.insert(path.clone(), bytes.clone());
+        }
     }
 
     Ok(CombineOutcome {
@@ -1128,4 +1155,102 @@ pub fn combine_sources(
         pass_through_conflicts: pt_conflicts,
         warnings,
     })
+}
+
+#[cfg(test)]
+mod combine_options_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    struct MapPak {
+        mount: String,
+        files: BTreeMap<String, Vec<u8>>,
+    }
+
+    impl PakSource for MapPak {
+        fn files(&self) -> Vec<String> {
+            self.files.keys().cloned().collect()
+        }
+        fn read(&self, path: &str) -> Result<Vec<u8>, crate::apply::ApplyError> {
+            self.files
+                .get(path)
+                .cloned()
+                .ok_or_else(|| crate::apply::ApplyError::Asset(format!("missing {path}")))
+        }
+        fn mount_point(&self) -> String {
+            self.mount.clone()
+        }
+    }
+
+    fn fixture(name: &str) -> Vec<u8> {
+        std::fs::read(format!(
+            "{}/../modman-uasset/tests/fixtures/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            name
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn datatables_only_drops_pass_through_files() {
+        let vua = fixture("DB_Aircraft.uasset");
+        let vue = fixture("DB_Aircraft.uexp");
+        let mua = fixture("DB_Aircraft.skin.merged.uasset");
+        let mue = fixture("DB_Aircraft.skin.merged.uexp");
+
+        let dt_ua = "../../../ProjectWingman/Content/Data/DB_Aircraft.uasset".to_string();
+        let dt_ue = "../../../ProjectWingman/Content/Data/DB_Aircraft.uexp".to_string();
+        let skin = "../../../ProjectWingman/Content/Assets/Skins/TF/TF_Grey.uasset".to_string();
+
+        let base = MapPak {
+            mount: "../../../".to_string(),
+            files: [
+                (dt_ua.clone(), vua),
+                (dt_ue.clone(), vue),
+                (skin.clone(), vec![0u8; 64]),
+            ]
+            .into(),
+        };
+        let modpak = MapPak {
+            mount: "../../../".to_string(),
+            files: [
+                (dt_ua.clone(), mua),
+                (dt_ue.clone(), mue),
+                (skin.clone(), vec![9u8; 64]), // a texture-ish override
+            ]
+            .into(),
+        };
+        let labels = vec!["skinmod".to_string()];
+        let src_refs: Vec<&dyn PakSource> = vec![&modpak];
+
+        // Default: merged datatable pair AND the pass-through skin file.
+        let full = combine_sources(&base, &src_refs, &labels).unwrap();
+        assert!(full.files.contains_key(&dt_ua) && full.files.contains_key(&dt_ue));
+        assert!(
+            full.files.contains_key(&skin),
+            "default keeps pass-throughs"
+        );
+        assert_eq!(full.files.len(), 3);
+
+        // datatables_only: exactly the merged pair, skin excluded, reported.
+        let dt = combine_sources_with(
+            &base,
+            &src_refs,
+            &labels,
+            &CombineOptions {
+                datatables_only: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            dt.files.keys().cloned().collect::<Vec<_>>(),
+            vec![dt_ua.clone(), dt_ue.clone()]
+        );
+        assert_eq!(dt.merged, 1);
+        assert!(
+            dt.warnings.iter().any(|w| w.contains("excluded 1")),
+            "the exclusion must be reported: {:?}",
+            dt.warnings
+        );
+    }
 }

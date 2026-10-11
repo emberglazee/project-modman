@@ -183,6 +183,10 @@ enum Commands {
         /// Wildcards like `~mods\*.pak` work even in cmd.exe, which leaves them
         /// unexpanded for native executables
         paks: Vec<String>,
+        /// Emit only the game's DataTable files; every other file
+        /// (textures, audio, meshes, loose files) is left out of the output
+        #[arg(long)]
+        datatables_only: bool,
         /// Path to the game install directory (auto-detected if omitted)
         #[arg(long)]
         install_path: Option<String>,
@@ -808,6 +812,7 @@ fn main() {
         }
         Some(Commands::Combine {
             paks,
+            datatables_only,
             install_path,
             output,
         }) => {
@@ -837,7 +842,7 @@ fn main() {
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
             println!("Game: {path}");
-            if let Err(e) = cmd_combine(&game_paks, &paks, &out_dir) {
+            if let Err(e) = cmd_combine(&game_paks, &paks, &out_dir, datatables_only) {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
@@ -1395,6 +1400,7 @@ fn cmd_combine(
     game_paks: &std::path::Path,
     pak_args: &[String],
     out_dir: &std::path::Path,
+    datatables_only: bool,
 ) -> Result<(), String> {
     // Expand args (files or directories, recursive).
     fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
@@ -1470,8 +1476,13 @@ fn cmd_combine(
         .map(|s| s as &dyn modman_core::combine::PakSource)
         .collect();
 
-    let outcome = modman_core::combine::combine_sources(&base_src, &src_refs, &labels)
-        .map_err(|e| format!("Combine error: {e}"))?;
+    let outcome = modman_core::combine::combine_sources_with(
+        &base_src,
+        &src_refs,
+        &labels,
+        &modman_core::combine::CombineOptions { datatables_only },
+    )
+    .map_err(|e| format!("Combine error: {e}"))?;
     let files = outcome.files.clone();
     let merged = outcome.merged;
     let conflicts = outcome.pass_through_conflicts.clone();
