@@ -1491,6 +1491,11 @@ fn cmd_combine(
     for w in &warnings {
         eprintln!("  Warning: {w}");
     }
+    for s in &outcome.skipped {
+        eprintln!(
+            "  Skipped {s}: a previous combine output, not a fresh mod — merge the original mod paks instead"
+        );
+    }
 
     if files.is_empty() {
         return Err("nothing to combine (no conflicting overrides found)".to_string());
@@ -1539,6 +1544,23 @@ fn cmd_combine(
         })
         .collect();
     other_warnings.extend(warnings.iter().cloned());
+    other_warnings.extend(outcome.skipped.iter().map(|s| {
+        format!(
+            "Skipped {s}: a previous combine output, not a fresh mod — merge the original mod paks instead"
+        )
+    }));
+    // The skipped inputs never merged: mark them in the order list so the
+    // report shows what actually participated.
+    let order: Vec<String> = order
+        .into_iter()
+        .map(|l| {
+            if outcome.skipped.iter().any(|s| s == &l) {
+                format!("{l} (skipped)")
+            } else {
+                l
+            }
+        })
+        .collect();
     print_merge_report(
         "Combine report",
         &order,

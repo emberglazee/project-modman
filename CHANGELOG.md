@@ -1,5 +1,26 @@
 # Changelog
 
+## [v0.4.5] — 2026-10-12
+
+**Quieter, truer combine reports.** Two fixes driven by a real-world mod set
+(5 aircraft mods + a stale output) whose report flooded with ~150 phantom
+conflicts and 432 pass-through warnings.
+
+### Fixed
+- `modman combine` no longer merges its own previous output: an input named
+  `SicarioCombine_P.pak` is skipped with a note (in the order list, the
+  warnings, and a stderr line) instead of flooding the report — a merged
+  table's shifted import indices made every vanilla row read as "changed".
+  The browser page renders the skip the same way (`skipped` in the report
+  JSON).
+- Same-field conflict comparison is now semantic for object references: two
+  mods whose refs resolve to the same `(ObjectName, ClassName)` in their own
+  tables no longer conflict just because the raw import numbers differ
+  (`-497` vs `-485`, both `F_15E_Cockpit`). Genuinely different targets
+  still conflict, and the winner's ref still remaps as before.
+- Conflict messages for arrays/structs now summarize (`ObjectProperty[5]
+  f15_59_01,f15_01,…`) instead of printing `'' vs ''`.
+
 ## [v0.4.4] — 2026-10-11
 
 **Datatable-only merges.** A new switch for people whose conflicts are in

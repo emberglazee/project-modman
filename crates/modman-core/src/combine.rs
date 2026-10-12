@@ -13,8 +13,15 @@
 //! (vanilla + union of extras, first-seen order).
 
 use crate::apply::ApplyError;
-use modman_uasset::walk::{ByteValue, DataTable, Prop, PropValue, Row};
+use modman_uasset::walk::{ArrayElem, ByteValue, DataTable, Prop, PropValue, Row};
 use std::collections::BTreeMap;
+
+/// The combine output filename. A `combine` input carrying this name is a
+/// previous run's output, never a fresh mod — merging it back in shifts every
+/// import index, so each vanilla row reads as "changed" and the report floods
+/// with phantom conflicts. Both frontends' outputs share this name, so the
+/// core orchestration owns the constant (and the skip).
+pub const COMBINE_OUTPUT_NAME: &str = "SicarioCombine_P.pak";
 
 pub struct CombinedPair {
     pub uasset: Vec<u8>,
@@ -30,8 +37,8 @@ struct RowState {
     name_bytes: Vec<u8>,
     /// Ordered props: (name, bytes with remapped name indices).
     props: Vec<(String, Vec<u8>)>,
-    /// Last editor + value repr per prop (for conflict detection).
-    sources: BTreeMap<String, (usize, String)>,
+    /// Last editor + semantic conflict key + display repr per prop.
+    sources: BTreeMap<String, (usize, String, String)>,
 }
 
 /// Three-way FIELD-LEVEL merge of a vanilla datatable pair with any number of
@@ -192,10 +199,15 @@ pub fn merge_datatable_overrides(
             }
             // Per-prop deltas. Comparison is byte-level over the prop's full
             // extent: value strings are None for arrays/structs (which would
-            // make every such prop look unchanged). The value repr is kept
-            // only for conflict messages.
+            // make every such prop look unchanged). Conflict comparison uses
+            // the semantic key (object refs resolved to the asset they name)
+            // while messages show the raw repr — index shifts from appended
+            // imports must not read as conflicts.
             for p in &r.props {
-                let repr = crate::resolver::prop_value_string(&p.value).unwrap_or_default();
+                // Display value (readable summary) vs conflict key
+                // (semantic repr — refs resolved to the asset they name).
+                let raw = display_repr(overrides[m].0, &dt.names, p);
+                let key = semantic_repr(overrides[m].0, &dt.names, p);
                 let pi = r.props.iter().position(|x| x.name == p.name).unwrap_or(0);
                 let extent_end = prop_extent_end(&r.props, pi, r.end);
                 let imp_map_ref = &import_maps[m];
@@ -225,8 +237,8 @@ pub fn merge_datatable_overrides(
                     &mut warnings,
                 );
                 let st = state.get_mut(&r.name).expect("row state exists");
-                if let Some((prev_m, prev_repr)) = st.sources.get(&p.name) {
-                    if *prev_m != m && *prev_repr != repr {
+                if let Some((prev_m, prev_key, prev_raw)) = st.sources.get(&p.name) {
+                    if *prev_m != m && *prev_key != key {
                         let label = |i: usize| {
                             labels
                                 .get(i)
@@ -238,9 +250,9 @@ pub fn merge_datatable_overrides(
                             r.name,
                             p.name,
                             label(*prev_m),
-                            prev_repr,
+                            prev_raw,
                             label(m),
-                            repr
+                            raw
                         ));
                     }
                 }
@@ -248,7 +260,7 @@ pub fn merge_datatable_overrides(
                     Some((_, slot)) => *slot = bytes,
                     None => st.props.push((p.name.clone(), bytes)),
                 }
-                st.sources.insert(p.name.clone(), (m, repr));
+                st.sources.insert(p.name.clone(), (m, key, raw));
             }
             // Prop deletions: vanilla props absent from this mod's row.
             if let Some(vr) = vanilla_row {
@@ -378,16 +390,134 @@ fn prop_has_moved_refs(p: &Prop, imp_map: &[i32]) -> bool {
         PropValue::Object(v) => moved(*v),
         PropValue::Struct { children } => children.iter().any(|c| prop_has_moved_refs(c, imp_map)),
         PropValue::Array { items, .. } => items.iter().any(|it| match it {
-            modman_uasset::walk::ArrayElem::Struct(props) => {
-                props.iter().any(|c| prop_has_moved_refs(c, imp_map))
-            }
-            modman_uasset::walk::ArrayElem::Prim {
+            ArrayElem::Struct(props) => props.iter().any(|c| prop_has_moved_refs(c, imp_map)),
+            ArrayElem::Prim {
                 value: PropValue::Object(v),
                 ..
             } => moved(*v),
             _ => false,
         }),
         _ => false,
+    }
+}
+
+/// Resolve an import reference to the (ObjectName, ClassName) pair it names
+/// in its OWN file's table — the semantic identity of a ref. Two refs that
+/// resolve to the same pair name the same asset even when their raw indices
+/// differ (a merged table's appended imports shift every index). Returns
+/// `None` for non-import refs or out-of-range entries.
+fn import_target(ua: &[u8], names: &[String], r: i32) -> Option<(String, String)> {
+    if r >= 0 {
+        return None;
+    }
+    let idx = (-r) as usize - 1;
+    let mimp = i32::from_le_bytes(ua.get(65..69)?.try_into().ok()?) as usize;
+    if idx >= mimp {
+        return None;
+    }
+    let off = i32::from_le_bytes(ua.get(69..73)?.try_into().ok()?) as usize + idx * 28;
+    let entry = ua.get(off..off + 28)?;
+    let cls = i32::from_le_bytes(entry[8..12].try_into().ok()?);
+    let obj = i32::from_le_bytes(entry[20..24].try_into().ok()?);
+    if cls < 0 || obj < 0 {
+        return None;
+    }
+    Some((
+        names.get(obj as usize)?.clone(),
+        names.get(cls as usize)?.clone(),
+    ))
+}
+
+/// Collect every import reference inside a prop value (recursing into
+/// structs and arrays), in walk order.
+fn collect_refs(p: &Prop, out: &mut Vec<i32>) {
+    match &p.value {
+        PropValue::Object(v) => out.push(*v),
+        PropValue::Struct { children } => children.iter().for_each(|c| collect_refs(c, out)),
+        PropValue::Array { items, .. } => items.iter().for_each(|it| match it {
+            ArrayElem::Struct(props) => props.iter().for_each(|c| collect_refs(c, out)),
+            ArrayElem::Prim {
+                value: PropValue::Object(v),
+                ..
+            } => out.push(*v),
+            _ => {}
+        }),
+        _ => {}
+    }
+}
+
+/// A readable one-line summary for conflict messages. Scalars and text use
+/// the human repr; arrays/structs (which stringify to "") summarize as
+/// `kind[count]` plus the resolved ref targets, so a message never reads
+/// `'' vs ''` for two genuinely different values.
+fn display_repr(ua: &[u8], names: &[String], p: &Prop) -> String {
+    let raw = crate::resolver::prop_value_string(&p.value).unwrap_or_default();
+    let shape = match &p.value {
+        PropValue::Array {
+            elem_type, count, ..
+        } => Some(format!("{elem_type}[{count}]")),
+        PropValue::Struct { children } => Some(format!("struct[{}]", children.len())),
+        PropValue::Custom(_) => Some("custom".to_string()),
+        _ => None,
+    };
+    let Some(mut out) = shape else {
+        return raw;
+    };
+    let mut refs = Vec::new();
+    collect_refs(p, &mut refs);
+    let imp_refs: Vec<i32> = refs.into_iter().filter(|v| *v < 0).collect();
+    if imp_refs.is_empty() {
+        return out;
+    }
+    out.push(' ');
+    out.push_str(
+        &imp_refs
+            .iter()
+            .map(|v| match import_target(ua, names, *v) {
+                Some((obj, _)) => obj,
+                None => format!("{v}"),
+            })
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    out
+}
+
+/// The semantic identity of a prop value for conflict comparison: the human
+/// repr, except that object refs are resolved to the (ObjectName, ClassName)
+/// they name in their own file's table. Raw import indices shift whenever a
+/// table carries appended imports, so comparing them directly reports phantom
+/// conflicts between refs that name the same asset (`-497` vs `-485` both
+/// being `F_15E_Cockpit/StaticMesh`). Unresolvable refs (out-of-range, export
+/// indices) keep the raw repr — always a real difference, never silenced.
+fn semantic_repr(ua: &[u8], names: &[String], p: &Prop) -> String {
+    let raw = crate::resolver::prop_value_string(&p.value).unwrap_or_default();
+    let mut refs = Vec::new();
+    collect_refs(p, &mut refs);
+    let imp_refs: Vec<i32> = refs.into_iter().filter(|v| *v < 0).collect();
+    if imp_refs.is_empty() {
+        return raw;
+    }
+    let mut targets: Vec<String> = Vec::with_capacity(imp_refs.len());
+    for v in &imp_refs {
+        match import_target(ua, names, *v) {
+            Some((obj, cls)) => targets.push(format!("{obj}<{cls}>")),
+            // Unresolvable refs (out-of-range, bad names) keep the raw
+            // number — always a real difference, never silenced.
+            None => targets.push(format!("{v}")),
+        }
+    }
+    // A bare object ref's raw repr IS the import number — pure index noise,
+    // so the resolved targets replace it entirely. Structs/arrays stringify
+    // to "" (no scalar content), so appending there is equally exact; any
+    // other shape keeps its raw content alongside.
+    if matches!(p.value, PropValue::Object(_)) {
+        targets.join(",")
+    } else {
+        let mut out = raw;
+        out.push('|');
+        out.push_str(&targets.join(","));
+        out
     }
 }
 
@@ -899,6 +1029,225 @@ mod tests {
             "vanilla rows preserved"
         );
     }
+
+    /// Two mods whose refs resolve to the SAME asset at DIFFERENT import
+    /// indices are not a conflict: the raw `-497` vs `-485` shape in the
+    /// wild (a merged table fed back in shifts every index) must compare by
+    /// resolved (ObjectName, ClassName), not by raw number.
+    #[test]
+    fn same_asset_different_index_is_not_a_conflict() {
+        let vua = fixture("DB_LevelList.uasset");
+        let vue = fixture("DB_LevelList.uexp");
+        let vdt = DataTable::walk_bytes(&vua, &vue).unwrap();
+        // Anchor: first negative object ref, by row + prop name (positions
+        // shift between input and output walks).
+        let (anchor_row, anchor_prop, anchor_ref) = vdt
+            .rows
+            .iter()
+            .find_map(|r| {
+                r.props.iter().find_map(|p| match &p.value {
+                    PropValue::Object(v) if *v < 0 => Some((r.name.clone(), p.name.clone(), *v)),
+                    _ => None,
+                })
+            })
+            .expect("fixture must contain an object ref");
+        let anchor_idx = (-anchor_ref) as usize - 1;
+        let mimp = rd_i32(&vua, 65) as usize;
+        assert!(anchor_idx < mimp);
+        let imp_off = rd_i32(&vua, 69) as usize;
+        // Victim: an import entry NO uexp ref and NO outer-link points at —
+        // computed, not hardcoded (elsewhere-verified: 0, 21, 98 here).
+        let mut referenced: std::collections::BTreeSet<usize> = vdt
+            .rows
+            .iter()
+            .flat_map(|r| r.props.iter())
+            .flat_map(|p| {
+                let mut v = Vec::new();
+                collect_refs(p, &mut v);
+                v
+            })
+            .filter(|v| *v < 0)
+            .map(|v| (-v) as usize - 1)
+            .collect();
+        for k in 0..mimp {
+            let outer = rd_i32(&vua, imp_off + k * 28 + 16);
+            if outer < 0 {
+                referenced.insert((-outer) as usize - 1);
+            }
+        }
+        let mut victims = (0..mimp).filter(|k| !referenced.contains(k) && *k != anchor_idx);
+        let (v1, v2) = (
+            victims
+                .next()
+                .expect("fixture needs unreferenced import entries"),
+            victims
+                .next()
+                .expect("fixture needs unreferenced import entries"),
+        );
+        let anchor_prop_walk = vdt
+            .rows
+            .iter()
+            .find(|r| r.name == anchor_row)
+            .and_then(|r| r.props.iter().find(|p| p.name == anchor_prop))
+            .expect("anchor prop");
+        // Each mod clones the anchor entry into its own victim slot — with
+        // that slot's OuterIndex PATCHED to point at itself, so neither clone
+        // byte-matches any vanilla entry and both survive content-based
+        // mapping as appended extras (the wild merged-table shape). Each
+        // mod's anchor row then points at its own victim index: same asset
+        // (ObjectName+ClassName), different numbers on both sides, so the
+        // later-wins path genuinely compares two keys.
+        let mk_mod = |victim: usize| {
+            let mut mua = vua.clone();
+            let mut anchor_entry =
+                vua[imp_off + anchor_idx * 28..imp_off + anchor_idx * 28 + 28].to_vec();
+            anchor_entry[16..20].copy_from_slice(&(-((victim as i32) + 1)).to_le_bytes());
+            mua[imp_off + victim * 28..imp_off + victim * 28 + 28].copy_from_slice(&anchor_entry);
+            let mut mue = vue.clone();
+            mue[anchor_prop_walk.vstart..anchor_prop_walk.vstart + 4]
+                .copy_from_slice(&(-((victim as i32) + 1)).to_le_bytes());
+            (mua, mue)
+        };
+        let (a_ua, a_ue) = mk_mod(v1);
+        let (b_ua, b_ue) = mk_mod(v2);
+
+        let out = merge_datatable_overrides(
+            (&vua, &vue),
+            &[(&a_ua, &a_ue), (&b_ua, &b_ue)],
+            &["modA".to_string(), "modB".to_string()],
+        )
+        .unwrap()
+        .expect("merge");
+        assert!(
+            out.conflicts.is_empty(),
+            "same asset at a different index is not a conflict: {:?}",
+            out.conflicts
+        );
+        // The later mod's edit still applied (its ref won the slot).
+        let odt = DataTable::walk_bytes(&out.uasset, &out.uexp).unwrap();
+        let orow = odt
+            .rows
+            .iter()
+            .find(|r| r.name == anchor_row)
+            .expect("anchor row in output");
+        let oprop = orow
+            .props
+            .iter()
+            .find(|p| p.name == anchor_prop)
+            .expect("anchor prop in output");
+        match &oprop.value {
+            PropValue::Object(v) => {
+                let got = import_target(&out.uasset, &odt.names, *v).expect("resolves");
+                // The victim entry is a clone of the anchor's, so the
+                // winner's ref must name the anchor's (ObjectName, ClassName).
+                let want = import_target(&vua, &vdt.names, anchor_ref).expect("anchor resolves");
+                assert_eq!(got, want, "winner's ref names the same asset");
+            }
+            other => panic!("not an object ref: {other:?}"),
+        }
+    }
+
+    /// A genuinely different target at the same field still conflicts: the
+    /// semantic compare must not swallow real differences.
+    #[test]
+    fn different_asset_same_field_still_conflicts() {
+        let vua = fixture("DB_LevelList.uasset");
+        let vue = fixture("DB_LevelList.uexp");
+        let vdt = DataTable::walk_bytes(&vua, &vue).unwrap();
+        let (anchor_row, anchor_prop, anchor_ref) = vdt
+            .rows
+            .iter()
+            .find_map(|r| {
+                r.props.iter().find_map(|p| match &p.value {
+                    PropValue::Object(v) if *v < 0 => Some((r.name.clone(), p.name.clone(), *v)),
+                    _ => None,
+                })
+            })
+            .expect("fixture must contain an object ref");
+        let anchor_idx = (-anchor_ref) as usize - 1;
+        let mimp = rd_i32(&vua, 65) as usize;
+        let imp_off = rd_i32(&vua, 69) as usize;
+        let anchor_prop_walk = vdt
+            .rows
+            .iter()
+            .find(|r| r.name == anchor_row)
+            .and_then(|r| r.props.iter().find(|p| p.name == anchor_prop))
+            .expect("anchor prop");
+        // Mod A repoints the field at a clone of the anchor entry (patched
+        // OuterIndex so it survives as an appended extra — a genuine edit
+        // with key = anchor target; a byte-identical mod A would be skipped
+        // and record no key, leaving mod B with nothing to clash against).
+        // Mod B repoints the same field at a DIFFERENT entry's slot: same
+        // field, other asset → exactly one conflict.
+        let other_idx = (anchor_idx + 1) % mimp;
+        assert_ne!(other_idx, anchor_idx);
+        let other_entry = vua[imp_off + other_idx * 28..imp_off + other_idx * 28 + 28].to_vec();
+        let anchor_bytes: [u8; 28] = vua[imp_off + anchor_idx * 28..imp_off + anchor_idx * 28 + 28]
+            .try_into()
+            .unwrap();
+        assert_ne!(
+            other_entry, anchor_bytes,
+            "test needs two distinct import entries"
+        );
+        // Anchor entry's ObjectName must differ from the other entry's, else
+        // the keys coincide and no conflict is (correctly) reported.
+        let oname = |idx: usize| rd_i32(&vua, imp_off + idx * 28 + 20);
+        assert_ne!(
+            oname(anchor_idx),
+            oname(other_idx),
+            "test needs two entries naming different objects"
+        );
+        let mut a_ua = vua.clone();
+        let mut clone = anchor_bytes.to_vec();
+        // Differ the clone's OuterIndex (point at the anchor slot) so it
+        // survives content-mapping as an appended extra; then overwrite an
+        // import slot no uexp ref or outer-link touches (computed below).
+        clone[16..20].copy_from_slice(&anchor_ref.to_le_bytes());
+        let mut referenced: std::collections::BTreeSet<usize> = vdt
+            .rows
+            .iter()
+            .flat_map(|r| r.props.iter())
+            .flat_map(|p| {
+                let mut v = Vec::new();
+                collect_refs(p, &mut v);
+                v
+            })
+            .filter(|v| *v < 0)
+            .map(|v| (-v) as usize - 1)
+            .collect();
+        for k in 0..mimp {
+            let outer = rd_i32(&vua, imp_off + k * 28 + 16);
+            if outer < 0 {
+                referenced.insert((-outer) as usize - 1);
+            }
+        }
+        let slot = (0..mimp)
+            .find(|k| !referenced.contains(k))
+            .expect("fixture needs an unreferenced import entry");
+        a_ua[imp_off + slot * 28..imp_off + slot * 28 + 28].copy_from_slice(&clone);
+        let mut a_ue = vue.clone();
+        a_ue[anchor_prop_walk.vstart..anchor_prop_walk.vstart + 4]
+            .copy_from_slice(&(-((slot as i32) + 1)).to_le_bytes());
+        let mut b_ue = vue.clone();
+        b_ue[anchor_prop_walk.vstart..anchor_prop_walk.vstart + 4]
+            .copy_from_slice(&(-((other_idx as i32) + 1)).to_le_bytes());
+
+        let out = merge_datatable_overrides(
+            (&vua, &vue),
+            &[(&a_ua, &a_ue), (&vua, &b_ue)],
+            &["modA".to_string(), "modB".to_string()],
+        )
+        .unwrap()
+        .expect("merge");
+        assert_eq!(
+            out.conflicts.len(),
+            1,
+            "different asset must conflict: {:?}",
+            out.conflicts
+        );
+        assert!(out.conflicts[0].contains("modA"));
+        assert!(out.conflicts[0].contains("modB"));
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -947,6 +1296,12 @@ pub struct CombineOutcome {
     pub pass_through_conflicts: Vec<String>,
     /// Merge warnings (divergences, unmergeable files, etc).
     pub warnings: Vec<String>,
+    /// Input labels skipped because they are a previous combine output
+    /// ([`COMBINE_OUTPUT_NAME`]), in input order. Merging a merged table
+    /// back in shifts every import index and floods the report with phantom
+    /// conflicts — so they are fixed-and-noted, never merged. Reported via
+    /// this field (not warnings) so both frontends render it the same way.
+    pub skipped: Vec<String>,
 }
 
 /// Combine conflicting override mods over a vanilla base: three-way
@@ -999,8 +1354,29 @@ pub fn combine_sources_with(
     let mut passthrough: std::collections::BTreeMap<String, (usize, Vec<u8>)> =
         std::collections::BTreeMap::new();
     let mut pt_conflicts: Vec<String> = Vec::new();
+    // Previous combine outputs are stale merges, not fresh mods: feeding one
+    // back in shifts every import index, so each vanilla row reads as changed
+    // and the report floods with phantom conflicts. Skip by label (filename),
+    // case-insensitively — fixed-and-noted, never an error.
+    let mut skipped: Vec<String> = Vec::new();
+    let live: Vec<(usize, &&dyn PakSource)> = mods
+        .iter()
+        .enumerate()
+        .filter(|(mi, _)| {
+            let label = labels
+                .get(*mi)
+                .cloned()
+                .unwrap_or_else(|| format!("override #{mi}"));
+            if label.eq_ignore_ascii_case(COMBINE_OUTPUT_NAME) {
+                skipped.push(label);
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
 
-    for (mi, m) in mods.iter().enumerate() {
+    for (mi, m) in live {
         let records = m.files();
         let mount = m.mount_point();
         let norm = |r: &String| r.replace('\\', "/");
@@ -1154,6 +1530,7 @@ pub fn combine_sources_with(
         field_conflicts,
         pass_through_conflicts: pt_conflicts,
         warnings,
+        skipped,
     })
 }
 
@@ -1251,6 +1628,47 @@ mod combine_options_tests {
             dt.warnings.iter().any(|w| w.contains("excluded 1")),
             "the exclusion must be reported: {:?}",
             dt.warnings
+        );
+    }
+
+    #[test]
+    fn previous_combine_output_is_skipped_not_merged() {
+        let vua = fixture("DB_Aircraft.uasset");
+        let vue = fixture("DB_Aircraft.uexp");
+        let mua = fixture("DB_Aircraft.skin.merged.uasset");
+        let mue = fixture("DB_Aircraft.skin.merged.uexp");
+
+        let dt_ua = "../../../ProjectWingman/Content/Data/DB_Aircraft.uasset".to_string();
+        let dt_ue = "../../../ProjectWingman/Content/Data/DB_Aircraft.uexp".to_string();
+
+        let base = MapPak {
+            mount: "../../../".to_string(),
+            files: [(dt_ua.clone(), vua), (dt_ue.clone(), vue)].into(),
+        };
+        let stale = MapPak {
+            mount: "../../../".to_string(),
+            files: [(dt_ua.clone(), mua), (dt_ue.clone(), mue)].into(),
+        };
+        let labels = vec![COMBINE_OUTPUT_NAME.to_string()];
+        let src_refs: Vec<&dyn PakSource> = vec![&stale];
+
+        let out = combine_sources(&base, &src_refs, &labels).unwrap();
+        assert_eq!(
+            out.skipped,
+            vec![COMBINE_OUTPUT_NAME.to_string()],
+            "the stale output must be reported as skipped"
+        );
+        assert!(
+            out.files.is_empty(),
+            "nothing to merge from a skipped input: {:?}",
+            out.files.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(out.merged, 0);
+        assert!(
+            out.field_conflicts.is_empty() && out.pass_through_conflicts.is_empty(),
+            "a skipped input contributes no conflicts: {:?} {:?}",
+            out.field_conflicts,
+            out.pass_through_conflicts
         );
     }
 }

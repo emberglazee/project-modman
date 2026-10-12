@@ -156,9 +156,18 @@ function showReport(report) {
   resultSummary.textContent = `${report.merged} datatable(s) merged, ${report.files} file(s) total`;
   resultCard.hidden = false;
 
+  const skipped = new Set(report.skipped || []);
   let html = '<h3>Merge order <span class="dim">(later entries win on conflicts)</span></h3><ol class="order">';
-  for (const label of report.order) html += `<li>${escapeHtml(label)}</li>`;
+  for (const label of report.order) {
+    html += skipped.has(label)
+      ? `<li>${escapeHtml(label)} <span class="dim">(skipped — previous output)</span></li>`
+      : `<li>${escapeHtml(label)}</li>`;
+  }
   html += '</ol>';
+
+  if (skipped.size) {
+    html += '<p class="warn">Skipped a previous combine output (SicarioCombine_P.pak) — merge the original mod paks instead.</p>';
+  }
 
   if (report.conflicts && report.conflicts.length) {
     html += '<h3 class="warn">Conflicts — later mod won</h3><ul class="conflicts">';

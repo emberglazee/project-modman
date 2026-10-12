@@ -28,10 +28,16 @@ modman combine <pak-or-dir...> --install-path <game> --output <dir>
   clobber another mod's edits.
 - **Field-level**: each property merges individually. Mod A editing a row's speed and
   mod B editing the same row's weapons → both survive.
-- **Same-field conflicts**: when two mods set the *same* property differently, the
-  later mod in the order wins, deterministically — and the conflict is **reported**,
-  never silent.
+- **Same-field conflicts**: when two mods set the *same* property to genuinely
+  different values, the later mod in the order wins, deterministically — and the
+  conflict is **reported**, never silent. Object references compare by the asset
+  they name, not by raw import number: two mods pointing at the same asset
+  through different table indices are not a conflict.
 - **Order** = the paks' filenames, sorted. The report shows the order used.
+- **Don't feed the output back in**: a previous `SicarioCombine_P.pak` found
+  among the inputs is skipped with a note, not merged — a merged table's
+  shifted indices would otherwise flood the report with phantom conflicts.
+  Merge the original mod paks instead.
 
 ## Reading the report
 
