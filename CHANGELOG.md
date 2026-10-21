@@ -49,10 +49,16 @@ browser engine and no terminal.
 ### Changed
 - Pass-through files (textures, meshes, audio: everything that cannot be
   field-merged) are streamed from the source pak into the output instead of
-  being held in memory. On the 29-mod set (4.4 GB of paks, 4.3 GB output) peak
-  memory fell from about 9 GB to **631 MB** in the GUI and **98 MB** in the CLI,
-  with byte-identical output (sha256 `555dca0d…`). An 8 GB machine can merge
-  that set now; before, it could not.
+  being held in memory. Measured on the same 29-mod set (4,410 MB of paks,
+  4.3 GB output), released 0.4.5 versus 0.5.0:
+
+      peak RSS   8,852 MB  ->  98 MB   (CLI)
+                               631 MB  (GUI, including extracting 29 archives)
+      time          25 s   ->  10 s    (CLI)
+      output     sha256 555dca0d... identical in both
+
+  An 8 GB machine could not run that merge on 0.4.5 at all; 0.5.0 uses a tenth
+  of it.
 - `combine::run_to_dir` is the single filesystem implementation behind both
   `modman combine` and the GUI, verified byte-identical against the previous
   inline path. Game detection moved from the CLI to `core::game` so both use it.
