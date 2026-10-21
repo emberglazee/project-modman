@@ -12,6 +12,7 @@ pub mod combine;
 pub mod components;
 pub mod discovery;
 pub mod fragment;
+pub mod game;
 pub mod hexpatch;
 pub mod locres;
 pub mod manifest;

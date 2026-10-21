@@ -1,7 +1,5 @@
 use clap::{Parser, Subcommand};
 
-mod game;
-
 #[derive(Parser)]
 #[command(
     name = "modman",
@@ -400,7 +398,7 @@ fn main() {
                 .collect();
             // Determine game path
             let game_path = install_path.clone().or_else(|| {
-                crate::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
+                modman_core::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
             });
 
             match game_path {
@@ -770,7 +768,7 @@ fn main() {
             output,
         }) => {
             let game_path = install_path.clone().or_else(|| {
-                crate::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
+                modman_core::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
             });
             let Some(path) = game_path else {
                 eprintln!("Error: Could not detect Project Wingman installation.");
@@ -891,7 +889,7 @@ fn main() {
             }
             let paks: Vec<String> = paks.iter().flat_map(|p| expand_glob_arg(p)).collect();
             let game_path = install_path.clone().or_else(|| {
-                crate::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
+                modman_core::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
             });
             let Some(path) = game_path else {
                 eprintln!("Error: Could not detect Project Wingman installation.");
@@ -1300,7 +1298,7 @@ fn main() {
 
 /// Game path via auto-detection (used by `locres extract`).
 fn modman_cli_game_path() -> Option<String> {
-    crate::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
+    modman_core::game::detect_game().map(|g| g.path.to_string_lossy().to_string())
 }
 
 /// Keep the welcome screen readable after a double-click:
@@ -1432,8 +1430,8 @@ fn audio_pak_paths(paths: &[String]) -> Result<Vec<std::path::PathBuf>, String> 
         }
     }
     if paks.is_empty() {
-        let game =
-            game::detect_game().ok_or("no pak given, and no Project Wingman install was found")?;
+        let game = modman_core::game::detect_game()
+            .ok_or("no pak given, and no Project Wingman install was found")?;
         let base = game.paks_path.join("pakchunk0-WindowsNoEditor.pak");
         if !base.is_file() {
             return Err(format!("expected the game pak at {}", base.display()));
@@ -1628,107 +1626,41 @@ fn cmd_combine(
         return Err("no paks given".to_string());
     }
 
-    // Shared orchestration (same semantics as the wasm page): wrap each pak
-    // as a PakSource and run the core combine.
-    struct ArchiveSource<'a>(&'a modman_pak::PakArchive);
-    impl modman_core::combine::PakSource for ArchiveSource<'_> {
-        fn files(&self) -> Vec<String> {
-            self.0.files()
-        }
-        fn read(&self, path: &str) -> Result<Vec<u8>, modman_core::apply::ApplyError> {
-            self.0
-                .read_entry(path)
-                .map_err(|e| modman_core::apply::ApplyError::Asset(e.to_string()))
-        }
-        fn mount_point(&self) -> String {
-            self.0.info().mount_point
-        }
-    }
+    // Shared with the browser page and the GUI: one implementation of the
+    // filesystem side of a merge, so the frontends cannot drift apart.
+    let base = game_paks.join("pakchunk0-WindowsNoEditor.pak");
+    let run = modman_core::combine::run_to_dir(
+        &base,
+        &paks,
+        out_dir,
+        &modman_core::combine::CombineOptions {
+            datatables_only,
+            ..Default::default()
+        },
+        |stage| {
+            if let modman_core::combine::CombineStage::Opening { label, .. } = stage {
+                println!("Reading: {label}");
+            }
+        },
+    )?;
 
-    let base_archive =
-        modman_pak::PakArchive::open(game_paks.join("pakchunk0-WindowsNoEditor.pak"))
-            .map_err(|e| format!("Pak error: {e}"))?;
-    let base_src = ArchiveSource(&base_archive);
-
-    let mut archives = Vec::new();
-    let mut labels = Vec::new();
-    for pak_path in &paks {
-        println!("Reading: {}", pak_path.display());
-        let a = modman_pak::PakArchive::open(pak_path)
-            .map_err(|e| format!("{}: {e}", pak_path.display()))?;
-        labels.push(
-            pak_path
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_else(|| pak_path.display().to_string()),
-        );
-        archives.push(a);
-    }
-    let srcs: Vec<ArchiveSource> = archives.iter().map(ArchiveSource).collect();
-    let src_refs: Vec<&dyn modman_core::combine::PakSource> = srcs
-        .iter()
-        .map(|s| s as &dyn modman_core::combine::PakSource)
-        .collect();
-
-    let outcome = modman_core::combine::combine_sources_with(
-        &base_src,
-        &src_refs,
-        &labels,
-        &modman_core::combine::CombineOptions { datatables_only },
-    )
-    .map_err(|e| format!("Combine error: {e}"))?;
-    let files = outcome.files.clone();
-    let merged = outcome.merged;
-    let conflicts = outcome.pass_through_conflicts.clone();
-    let field_conflicts = outcome.field_conflicts.clone();
-    let warnings = outcome.warnings.clone();
-    for w in &warnings {
+    println!(
+        "\nWrote {} ({} datatable(s) merged, {} file(s) total)",
+        run.output.display(),
+        run.merged,
+        run.files
+    );
+    for w in &run.warnings {
         eprintln!("  Warning: {w}");
     }
-    for s in &outcome.skipped {
+    for s in &run.skipped {
         eprintln!(
             "  Skipped {s}: a previous combine output, not a fresh mod — merge the original mod paks instead"
         );
     }
 
-    if files.is_empty() {
-        return Err("nothing to combine (no conflicting overrides found)".to_string());
-    }
-    let staging = out_dir.join("staging");
-    // (the scratch dir is removed again at the end of this function)
-    let _ = std::fs::remove_dir_all(&staging);
-    std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
-    for (key, bytes) in &files {
-        let out_path = staging.join(key);
-        if let Some(parent) = out_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        std::fs::write(&out_path, bytes).map_err(|e| e.to_string())?;
-    }
-    let pak_out = out_dir.join("SicarioCombine_P.pak");
-    modman_pak::pack(
-        &staging,
-        &pak_out,
-        modman_pak::Version::V3,
-        "../../../".to_string(),
-        None,
-    )
-    .map_err(|e| format!("Pack error: {e}"))?;
-    println!(
-        "\nWrote {} ({} datatable(s) merged, {} file(s) total)",
-        pak_out.display(),
-        merged,
-        files.len()
-    );
-    let order: Vec<String> = paks
-        .iter()
-        .map(|p| {
-            p.file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_else(|| p.display().to_string())
-        })
-        .collect();
-    let mut other_warnings: Vec<String> = conflicts
+    let mut other_warnings: Vec<String> = run
+        .pass_through_conflicts
         .iter()
         .map(|c| {
             format!(
@@ -1737,21 +1669,22 @@ fn cmd_combine(
             )
         })
         .collect();
-    other_warnings.extend(warnings.iter().cloned());
-    other_warnings.extend(outcome.skipped.iter().map(|s| {
+    other_warnings.extend(run.warnings.iter().cloned());
+    other_warnings.extend(run.skipped.iter().map(|s| {
         format!(
             "Skipped {s}: a previous combine output, not a fresh mod — merge the original mod paks instead"
         )
     }));
     // The skipped inputs never merged: mark them in the order list so the
     // report shows what actually participated.
-    let order: Vec<String> = order
-        .into_iter()
+    let order: Vec<String> = run
+        .order
+        .iter()
         .map(|l| {
-            if outcome.skipped.iter().any(|s| s == &l) {
+            if run.skipped.iter().any(|s| s == l) {
                 format!("{l} (skipped)")
             } else {
-                l
+                l.clone()
             }
         })
         .collect();
@@ -1759,15 +1692,12 @@ fn cmd_combine(
         "Combine report",
         &order,
         &format!(
-            "Merged {merged} datatable(s), {} file(s) total",
-            files.len()
+            "Merged {} datatable(s), {} file(s) total",
+            run.merged, run.files
         ),
-        &field_conflicts,
+        &run.field_conflicts,
         &other_warnings,
     );
-    // The staging dir is a scratch area; the C# transport left none behind,
-    // and in the Vortex flow it would be deployed to the game as junk files.
-    let _ = std::fs::remove_dir_all(out_dir.join("staging"));
     Ok(())
 }
 

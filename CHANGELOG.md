@@ -1,39 +1,19 @@
 # Changelog
 
-## [v0.5.0] — 2026-10-21
+## [v0.5.0] — 2026-10-22
 
-**Game audio comes out as Ogg.** `modman audio` lists the sound assets in a pak
-and writes each SoundWave out as the `.ogg` stream it already contains.
+**Game audio comes out as Ogg, and the desktop app arrives.** `modman audio`
+lists the sound assets in a pak and writes each SoundWave out as the `.ogg`
+stream it already contains. `modman-gui` puts the merge in a window, with no
+browser engine and no terminal.
 
 ### Added
-- Two guides written for people who are not tool authors:
-  [`docs/merging-in-the-browser.md`](docs/merging-in-the-browser.md) and
-  [`docs/command-line-walkthrough.md`](docs/command-line-walkthrough.md). The
-  second one explains how to open a terminal, what each part of the command
-  means, and what every common error means.
-- The browser page now opens with a four-step "first time here" block, and every
-  failure gets a titled explanation instead of a generic message: out of memory,
-  not a pak, stuck reading the game pak, unreadable file, and internal error are
-  each recognised and answered with the next step.
-- Failed merges now produce a **copyable diagnostics block**: the page, browser,
-  mod list with sizes, game pak, number of reads and where it stopped. Reports
-  built from that are actionable without a follow-up round trip.
-- The page's scripts carry a version query (`?v=0.5.0`), so a returning visitor
-  no longer runs a cached copy of the previous release's JavaScript.
-
-### Fixed
-- The browser page gave up after 200 reads from the game pak and could stop
-  without saying so. It now runs to completion (100,000 reads as a safety net)
-  and reports a stalled read as its own error instead of looping or hanging.
-- Loading a file that is not a pak produced a raw repak version probe
-  (`trying version V11 failed: got 111, which is not a boolean`) with no
-  indication of what to do. That now reads "One of the files is not a mod pak"
-  with the three usual causes.
-- The browser's real ceiling is now measured rather than guessed, and stated in
-  the page, the error message and the guide: with aircraft addons of about
-  140 MB each, 4 merged and 6 ran out, so roughly 500 MB of mod paks is a safe
-  batch. The same 29-mod set (4.4 GB) merges into a 4.3 GB pak in 17 seconds
-  with the desktop build, which is what the out-of-memory message points at.
+- `modman-gui`, a native desktop front end. Drop `.rar`, `.7z`, `.zip` or `.pak`
+  files on the window and it extracts them in-process, merges, shows the
+  conflict report and installs into `~mods` with a timestamped backup. Archive
+  support is pure Rust (`rars` Apache-2.0, `sevenz-rust` MIT, `zip` MIT), so
+  nothing has to be installed on the machine, on Windows or anywhere else. egui,
+  no browser engine, ~17 MB binary.
 - `modman audio list` prints the SoundWave assets in a pak, or in the game's own
   pak when no path is given, with `--filter` to narrow by path substring.
 - `modman audio extract` writes each SoundWave to a mirrored tree of `.ogg`
@@ -53,6 +33,46 @@ and writes each SoundWave out as the `.ogg` stream it already contains.
   decoding cleanly. One Frontline-59 track (`Music/M05/PW_MF_M5_LOOP`) is stored
   with UE bulk compression rather than as a raw stream, so it is named and
   skipped.
+- Two guides written for people who are not tool authors:
+  [`docs/merging-in-the-browser.md`](docs/merging-in-the-browser.md) and
+  [`docs/command-line-walkthrough.md`](docs/command-line-walkthrough.md). The
+  second one explains how to open a terminal, what each part of the command
+  means, and what every common error means.
+- The browser page opens with a four-step "first time here" block, and every
+  failure gets a titled explanation instead of a generic message: out of memory,
+  not a pak, stuck reading the game pak, unreadable file, and internal error are
+  each recognised and answered with the next step.
+- Failed merges produce a **copyable diagnostics block**: the page, browser, mod
+  list with sizes, game pak, number of reads and where it stopped. Reports built
+  from that are actionable without a follow-up round trip.
+
+### Changed
+- Pass-through files (textures, meshes, audio: everything that cannot be
+  field-merged) are streamed from the source pak into the output instead of
+  being held in memory. On the 29-mod set (4.4 GB of paks, 4.3 GB output) peak
+  memory fell from about 9 GB to **631 MB** in the GUI and **98 MB** in the CLI,
+  with byte-identical output (sha256 `555dca0d…`). An 8 GB machine can merge
+  that set now; before, it could not.
+- `combine::run_to_dir` is the single filesystem implementation behind both
+  `modman combine` and the GUI, verified byte-identical against the previous
+  inline path. Game detection moved from the CLI to `core::game` so both use it.
+- The browser's practical ceiling is measured and stated rather than implied:
+  with aircraft addons of about 140 MB each, 4 merged and 6 ran out, so roughly
+  500 MB of mod paks is a safe batch. The page hint, the out-of-memory message
+  and the guide all say so, and point at the desktop build, which does the same
+  29-mod set in 17 seconds from the command line or under a minute in the GUI
+  including archive extraction.
+
+### Fixed
+- The browser page gave up after 200 reads from the game pak and could stop
+  without saying so. It now runs to completion (100,000 reads as a safety net)
+  and reports a stalled read as its own error instead of looping or hanging.
+- Loading a file that is not a pak produced a raw repak version probe
+  (`trying version V11 failed: got 111, which is not a boolean`) with no
+  indication of what to do. That now reads "One of the files is not a mod pak"
+  with the three usual causes.
+- The page's scripts carry a version query (`?v=0.5.0`), so a returning visitor
+  no longer runs a cached copy of the previous release's JavaScript.
 
 ## [v0.4.5] — 2026-10-21
 

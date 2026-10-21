@@ -13,11 +13,18 @@ between the layers, and where a new feature belongs.
 | `modman-uasset` | `modman-uasset` | Reads and splices cooked `.uasset` and `.uexp` pairs: header, name and import tables, the DataTable walker, the byte editor, table rewriting, object-import insertion, SoundWave extraction, name hashing. Knows nothing about mods. | none |
 | `modman-core` | `modman-core` | Everything in between: manifests, templates, fragments, patch parsing, resolution, length-changing row operations, the merge pipeline, `combine`, locres, audio, component discovery. | pak, uasset |
 | `modman-cli` | `modman` | The command line. Argument parsing, path handling, progress and report output, file writing. | core, pak, uasset |
+| `modman-gui` | `modman-gui` | The native desktop app (egui). Native dialogs, archive extraction, progress, install-with-backup. Calls the same `combine::run_to_dir` as the CLI. | core, pak |
 | `modman-wasm` | `modman-wasm` | The browser frontend. Exposes `combine` to JavaScript and reads the game pak through a sparse `Read + Seek` source. | core, pak |
 
 `modman-wasm` deliberately shares `combine_sources` and the `PakSource` trait
 with the CLI rather than reimplementing them. A merge in the browser and a merge
 on the command line are the same code over different byte sources.
+
+The same rule applies one level up: `combine::run_to_dir` owns the filesystem
+side of a merge (open the game pak, open each mod, merge, stage, pack), and the
+CLI and the GUI both call it. Game detection lives in `core::game` for the same
+reason. A frontend decides *what* to merge and *how to show it*; it does not get
+its own copy of the merge.
 
 The CLI's package name is `modman` while the directory is `modman-cli`, so
 build it with `cargo build -p modman`.

@@ -15,6 +15,7 @@
 use crate::apply::ApplyError;
 use modman_uasset::walk::{ArrayElem, ByteValue, DataTable, Prop, PropValue};
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 /// The combine output filename. A `combine` input carrying this name is a
 /// previous run's output, never a fresh mod — merging it back in shifts every
@@ -1596,7 +1597,8 @@ pub fn effective_path(mount: &str, record: &str) -> String {
 /// Result of a full combine run.
 #[derive(Debug, Default)]
 pub struct CombineOutcome {
-    /// path -> bytes: merged datatables + pass-through files, ready to pack.
+    /// path -> bytes: merged datatables and their fallbacks. Pass-through
+    /// files are here too unless the caller asked to defer them.
     pub files: std::collections::BTreeMap<String, Vec<u8>>,
     /// How many datatables were merged.
     pub merged: usize,
@@ -1612,6 +1614,10 @@ pub struct CombineOutcome {
     /// conflicts — so they are fixed-and-noted, never merged. Reported via
     /// this field (not warnings) so both frontends render it the same way.
     pub skipped: Vec<String>,
+    /// Deferred pass-through files: (effective path, source index, source entry
+    /// path). Populated only when `defer_passthrough` is set; the caller reads
+    /// these from the source pak when writing the output.
+    pub pass_through: Vec<(String, usize, String)>,
 }
 
 /// Combine conflicting override mods over a vanilla base: three-way
@@ -1624,6 +1630,11 @@ pub struct CombineOptions {
     /// fallback when unmergeable). Every pass-through file — textures,
     /// audio, meshes, loose files — is left out of the output.
     pub datatables_only: bool,
+    /// Record pass-through files as (path, source index, source entry) instead
+    /// of reading their bytes. Filesystem frontends set this and copy the bytes
+    /// straight from the source pak while writing, so a 4.4 GB mod set does not
+    /// have to sit in RAM. The browser leaves it off: it needs the bytes.
+    pub defer_passthrough: bool,
 }
 
 pub fn combine_sources(
@@ -1661,7 +1672,7 @@ pub fn combine_sources_with(
     }
     let mut dt_overrides: std::collections::BTreeMap<String, Vec<Override>> =
         std::collections::BTreeMap::new();
-    let mut passthrough: std::collections::BTreeMap<String, (usize, Vec<u8>)> =
+    let mut passthrough: std::collections::BTreeMap<String, (usize, String)> =
         std::collections::BTreeMap::new();
     let mut pt_conflicts: Vec<String> = Vec::new();
     // Previous combine outputs are stale merges, not fresh mods: feeding one
@@ -1717,15 +1728,16 @@ pub fn combine_sources_with(
                     seen.insert(uexp_eff.clone());
                     let Some(vkey) = base_find(eff) else {
                         // Not a game file: single-winner pass-through pair.
-                        let ua = m.read(raw)?;
-                        let ue = m.read(uraw)?;
-                        for (k, b) in [(eff.clone(), ua), (uexp_eff.clone(), ue)] {
+                        for (k, src_entry) in [
+                            (eff.clone(), raw.clone()),
+                            (uexp_eff.clone(), uexp_raw.clone()),
+                        ] {
                             if let Some((prev, _)) = passthrough.get(&k) {
                                 if *prev != mi {
                                     pt_conflicts.push(k.clone());
                                 }
                             }
-                            passthrough.insert(k, (mi, b));
+                            passthrough.insert(k, (mi, src_entry));
                         }
                         continue;
                     };
@@ -1734,22 +1746,26 @@ pub fn combine_sources_with(
                         continue;
                     };
                     let ua = m.read(raw)?;
-                    let ue = m.read(uraw)?;
                     // Only real DataTables are field-mergeable. Opaque assets
                     // (textures, audio, meshes) that happen to ship a
                     // .uasset+.uexp pair pass through single-winner — their
                     // payloads (pixels, samples, vertices) cannot be merged.
                     if modman_uasset::asset_class(&ua).ok().as_deref() != Some("DataTable") {
-                        for (k, b) in [(eff.clone(), ua), (uexp_eff.clone(), ue)] {
+                        drop(ua);
+                        for (k, src_entry) in [
+                            (eff.clone(), raw.clone()),
+                            (uexp_eff.clone(), uexp_raw.clone()),
+                        ] {
                             if let Some((prev, _)) = passthrough.get(&k) {
                                 if *prev != mi {
                                     pt_conflicts.push(k.clone());
                                 }
                             }
-                            passthrough.insert(k, (mi, b));
+                            passthrough.insert(k, (mi, src_entry));
                         }
                         continue;
                     }
+                    let ue = m.read(uraw)?;
                     let vua = base.read(&vkey)?;
                     let vue = base.read(&vue_key)?;
                     if ua == vua && ue == vue {
@@ -1767,18 +1783,18 @@ pub fn combine_sources_with(
                 }
             }
             if seen.insert(eff.clone()) {
-                let bytes = m.read(raw)?;
                 if let Some((prev, _)) = passthrough.get(eff) {
                     if *prev != mi {
                         pt_conflicts.push(eff.clone());
                     }
                 }
-                passthrough.insert(eff.clone(), (mi, bytes));
+                passthrough.insert(eff.clone(), (mi, raw.clone()));
             }
         }
     }
 
     let mut files = std::collections::BTreeMap::new();
+    let mut pass_through: Vec<(String, usize, String)> = Vec::new();
     let mut merged = 0usize;
     let mut field_conflicts: Vec<String> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -1828,9 +1844,19 @@ pub fn combine_sources_with(
                 "excluded {dropped} non-datatable file(s) (--datatables-only)"
             ));
         }
+    } else if options.defer_passthrough {
+        // Hand the caller source locations; it copies the bytes straight into
+        // the output instead of materialising them here.
+        pass_through = passthrough
+            .into_iter()
+            .map(|(path, (mi, src_entry))| (path, mi, src_entry))
+            .collect();
     } else {
-        for (path, (_, bytes)) in &passthrough {
-            files.insert(path.clone(), bytes.clone());
+        // In-memory frontends get the bytes. Moved, never cloned: the clone
+        // doubled peak memory for nothing.
+        for (path, (mi, src_entry)) in passthrough {
+            let bytes = mods[mi].read(&src_entry)?;
+            files.insert(path, bytes);
         }
     }
 
@@ -1841,6 +1867,159 @@ pub fn combine_sources_with(
         pass_through_conflicts: pt_conflicts,
         warnings,
         skipped,
+        pass_through,
+    })
+}
+
+// ── File-level orchestration ──────────────────────────────────────────────
+//
+// `modman combine`, the browser page and the GUI all run the same job. The
+// pieces below are the parts that touch the filesystem, so every frontend
+// shares one implementation instead of three that drift.
+
+/// Where a combine run currently is, for a frontend's progress display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CombineStage {
+    Opening {
+        index: usize,
+        total: usize,
+        label: String,
+    },
+    Merging,
+    Writing {
+        files: usize,
+    },
+    Packing,
+}
+
+/// What a completed run produced, without the file bytes.
+#[derive(Debug, Clone)]
+pub struct CombineRun {
+    pub output: PathBuf,
+    pub merged: usize,
+    pub files: usize,
+    pub order: Vec<String>,
+    pub field_conflicts: Vec<String>,
+    pub pass_through_conflicts: Vec<String>,
+    pub warnings: Vec<String>,
+    pub skipped: Vec<String>,
+}
+
+struct ArchiveSource<'a>(&'a modman_pak::PakArchive);
+
+impl PakSource for ArchiveSource<'_> {
+    fn files(&self) -> Vec<String> {
+        self.0.files()
+    }
+    fn read(&self, path: &str) -> Result<Vec<u8>, ApplyError> {
+        self.0
+            .read_entry(path)
+            .map_err(|e| ApplyError::Asset(e.to_string()))
+    }
+    fn mount_point(&self) -> String {
+        self.0.info().mount_point
+    }
+}
+
+/// Run a combine over paks on disk and write `SicarioCombine_P.pak` into
+/// `out_dir`. Returns the report; the caller decides how to show it.
+pub fn run_to_dir(
+    base_pak: &Path,
+    mod_paks: &[PathBuf],
+    out_dir: &Path,
+    options: &CombineOptions,
+    mut on_stage: impl FnMut(&CombineStage),
+) -> Result<CombineRun, String> {
+    if mod_paks.is_empty() {
+        return Err("no mod paks given".to_string());
+    }
+
+    let base_archive = modman_pak::PakArchive::open(base_pak)
+        .map_err(|e| format!("{}: {e}", base_pak.display()))?;
+    let base_src = ArchiveSource(&base_archive);
+
+    let mut archives = Vec::with_capacity(mod_paks.len());
+    let mut labels = Vec::with_capacity(mod_paks.len());
+    for (i, path) in mod_paks.iter().enumerate() {
+        let label = path
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.display().to_string());
+        on_stage(&CombineStage::Opening {
+            index: i + 1,
+            total: mod_paks.len(),
+            label: label.clone(),
+        });
+        let archive = modman_pak::PakArchive::open(path).map_err(|e| format!("{label}: {e}"))?;
+        labels.push(label);
+        archives.push(archive);
+    }
+    let srcs: Vec<ArchiveSource> = archives.iter().map(ArchiveSource).collect();
+    let src_refs: Vec<&dyn PakSource> = srcs.iter().map(|s| s as &dyn PakSource).collect();
+
+    on_stage(&CombineStage::Merging);
+    // Filesystem frontends never need pass-through bytes in RAM: they are
+    // copied from the source pak straight into the staging tree below.
+    let opts = CombineOptions {
+        datatables_only: options.datatables_only,
+        defer_passthrough: true,
+    };
+    let outcome =
+        combine_sources_with(&base_src, &src_refs, &labels, &opts).map_err(|e| e.to_string())?;
+
+    let total_files = outcome.files.len() + outcome.pass_through.len();
+    if total_files == 0 {
+        return Err("nothing to combine (no conflicting overrides found)".to_string());
+    }
+
+    on_stage(&CombineStage::Writing { files: total_files });
+    let staging = out_dir.join("staging");
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).map_err(|e| format!("{}: {e}", staging.display()))?;
+    for (key, bytes) in &outcome.files {
+        let path = staging.join(key);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+
+    // Pass-through content: streamed from the source pak to its staging file,
+    // one file at a time. This is what keeps a 4.4 GB set from needing GBs of
+    // RAM — the bytes are never held whole.
+    for (path, source, entry) in &outcome.pass_through {
+        let out_path = staging.join(path);
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        archives[*source]
+            .extract_entry(entry, &out_path)
+            .map_err(|e| format!("{path}: {e}"))?;
+    }
+
+    on_stage(&CombineStage::Packing);
+    let output = out_dir.join(COMBINE_OUTPUT_NAME);
+    modman_pak::pack(
+        &staging,
+        &output,
+        modman_pak::Version::V3,
+        "../../../".to_string(),
+        None,
+    )
+    .map_err(|e| format!("pack: {e}"))?;
+    // The staging copy is scratch; leaving multi-gigabyte duplicates behind is
+    // how a user's disk fills up silently.
+    let _ = std::fs::remove_dir_all(&staging);
+
+    Ok(CombineRun {
+        output,
+        merged: outcome.merged,
+        files: total_files,
+        order: labels,
+        field_conflicts: outcome.field_conflicts,
+        pass_through_conflicts: outcome.pass_through_conflicts,
+        warnings: outcome.warnings,
+        skipped: outcome.skipped,
     })
 }
 
@@ -1926,6 +2105,7 @@ mod combine_options_tests {
             &labels,
             &CombineOptions {
                 datatables_only: true,
+                ..Default::default()
             },
         )
         .unwrap();

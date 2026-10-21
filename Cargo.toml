@@ -6,6 +6,7 @@ members = [
     "crates/modman-pak",
     "crates/modman-cli",
     "crates/modman-wasm",
+    "crates/modman-gui",
 ]
 
 [workspace.package]

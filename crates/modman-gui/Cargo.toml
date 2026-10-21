@@ -1,0 +1,29 @@
+[package]
+name = "modman-gui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native desktop front end for the modman merge engine"
+
+[dependencies]
+modman-core = { path = "../modman-core" }
+modman-pak = { path = "../modman-pak" }
+
+# egui rather than a webview: no browser engine, no system toolkit, one binary.
+eframe = { version = "0.29", default-features = false, features = ["glow", "default_fonts"] }
+rfd = "0.15"
+
+# Archive extraction, all pure Rust so nothing has to be installed or bundled.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+sevenz-rust = "0.6"
+# Reading only: we never write or decrypt RAR archives, and the writer plus
+# crypto paths cost several MB of binary.
+rars = { version = "0.11", default-features = false }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
