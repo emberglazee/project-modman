@@ -1,5 +1,31 @@
 # Changelog
 
+## [v0.5.0] — 2026-10-21
+
+**Game audio comes out as Ogg.** `modman audio` lists the sound assets in a pak
+and writes each SoundWave out as the `.ogg` stream it already contains.
+
+### Added
+- `modman audio list` prints the SoundWave assets in a pak, or in the game's own
+  pak when no path is given, with `--filter` to narrow by path substring.
+- `modman audio extract` writes each SoundWave to a mirrored tree of `.ogg`
+  files, with `--output`, `--filter` and `--manifest` (a CSV of what was
+  written). Non-sound assets are counted and skipped, and an asset that fails to
+  parse is reported rather than aborting the run.
+- Both storage layouts are handled: the stream inline in the `.uexp`, and the
+  streamed form where a 256 KB prefix sits in the `.uexp` and the rest in a
+  sibling `.ubulk`. The streamed form is what the long music tracks use, and
+  what any mod that imports audio with streaming enabled produces.
+- Output is the game's own Vorbis stream, trimmed at the Ogg end-of-stream page,
+  so nothing is re-encoded. Durations match the engine's own `Duration` field to
+  the decimal: the three Kings tracks decode at 424.615 s, 380.308 s and
+  162.000 s from the base game, and 248.611 s, 154.681 s and 162.000 s from the
+  Archange replacement mod.
+- Whole-pak run on the retail build: 5,118 `.ogg` files, 345 MB, every one
+  decoding cleanly. One Frontline-59 track (`Music/M05/PW_MF_M5_LOOP`) is stored
+  with UE bulk compression rather than as a raw stream, so it is named and
+  skipped.
+
 ## [v0.4.5] — 2026-10-21
 
 **Combine reports are quieter and merged tables load.** A real mod set (5

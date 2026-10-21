@@ -13,6 +13,33 @@ struct Cli {
     command: Option<Commands>,
 }
 
+/// Audio subcommands
+#[derive(Subcommand)]
+enum AudioCmd {
+    /// List the sound assets and their engine classes
+    List {
+        /// Pak files or directories (default: the game's own pak)
+        paths: Vec<String>,
+        /// Only assets whose path contains this text (case-insensitive)
+        #[arg(long)]
+        filter: Option<String>,
+    },
+    /// Extract every SoundWave as .ogg, mirroring the asset tree
+    Extract {
+        /// Pak files or directories (default: the game's own pak)
+        paths: Vec<String>,
+        /// Output directory (default: modman-audio)
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Only assets whose path contains this text (case-insensitive)
+        #[arg(long)]
+        filter: Option<String>,
+        /// Write a CSV of what was extracted
+        #[arg(long)]
+        manifest: Option<String>,
+    },
+}
+
 /// .locres subcommands
 #[derive(Subcommand)]
 enum LocresCmd {
@@ -90,6 +117,11 @@ enum Commands {
     Locres {
         #[command(subcommand)]
         cmd: LocresCmd,
+    },
+    /// List or extract game audio (SoundWaves are Ogg Vorbis)
+    Audio {
+        #[command(subcommand)]
+        cmd: AudioCmd,
     },
     /// Print .pak file info
     Info {
@@ -853,6 +885,12 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some(Commands::Audio { cmd }) => {
+            if let Err(e) = cmd_audio(cmd) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
         Some(Commands::Locres { cmd }) => {
             use modman_core::locres::LocresFile;
             match cmd {
@@ -1332,6 +1370,133 @@ fn print_mod_summary(m: &modman_core::manifest::WingmanMod, indent: &str) {
     if !m.sicario.enable_steps.is_empty() {
         let keys: Vec<&str> = m.sicario.enable_steps.keys().map(|s| s.as_str()).collect();
         println!("{indent}    enableSteps: {}", keys.join(", "));
+    }
+}
+
+/// Paks to read audio from: the given paths (expanded), or the game's own pak.
+fn audio_pak_paths(paths: &[String]) -> Result<Vec<std::path::PathBuf>, String> {
+    fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                collect(&p, out);
+            } else if p
+                .extension()
+                .and_then(|x| x.to_str())
+                .is_some_and(|x| x.eq_ignore_ascii_case("pak"))
+            {
+                out.push(p);
+            }
+        }
+    }
+
+    let mut paks = Vec::new();
+    for a in paths {
+        let p = std::path::PathBuf::from(unquote(a));
+        if p.is_dir() {
+            collect(&p, &mut paks);
+        } else {
+            paks.push(p);
+        }
+    }
+    if paks.is_empty() {
+        let game =
+            game::detect_game().ok_or("no pak given, and no Project Wingman install was found")?;
+        let base = game.paks_path.join("pakchunk0-WindowsNoEditor.pak");
+        if !base.is_file() {
+            return Err(format!("expected the game pak at {}", base.display()));
+        }
+        paks.push(base);
+    }
+    paks.sort();
+    Ok(paks)
+}
+
+fn cmd_audio(cmd: AudioCmd) -> Result<(), String> {
+    struct ArchiveSource<'a>(&'a modman_pak::PakArchive);
+    impl modman_core::combine::PakSource for ArchiveSource<'_> {
+        fn files(&self) -> Vec<String> {
+            self.0.files()
+        }
+        fn read(&self, path: &str) -> Result<Vec<u8>, modman_core::apply::ApplyError> {
+            self.0
+                .read_entry(path)
+                .map_err(|e| modman_core::apply::ApplyError::Asset(e.to_string()))
+        }
+        fn mount_point(&self) -> String {
+            self.0.info().mount_point
+        }
+    }
+
+    match cmd {
+        AudioCmd::List { paths, filter } => {
+            for pak_path in audio_pak_paths(&paths)? {
+                let pak = modman_pak::PakArchive::open(pak_path.to_string_lossy().as_ref())
+                    .map_err(|e| e.to_string())?;
+                let rows = modman_core::audio::list(&ArchiveSource(&pak), filter.as_deref())
+                    .map_err(|e| e.to_string())?;
+                let sounds = rows.iter().filter(|(_, c)| c == "SoundWave").count();
+                for (asset, class) in &rows {
+                    if class == "SoundWave" {
+                        println!("{asset}");
+                    }
+                }
+                eprintln!(
+                    "{}: {} sound asset(s), {} other",
+                    pak_path.display(),
+                    sounds,
+                    rows.len() - sounds
+                );
+            }
+            Ok(())
+        }
+        AudioCmd::Extract {
+            paths,
+            output,
+            filter,
+            manifest,
+        } => {
+            let out = std::path::PathBuf::from(output.unwrap_or_else(|| "modman-audio".into()));
+            let (mut written, mut skipped, mut failed) = (0usize, 0usize, 0usize);
+            for pak_path in audio_pak_paths(&paths)? {
+                let pak = modman_pak::PakArchive::open(pak_path.to_string_lossy().as_ref())
+                    .map_err(|e| e.to_string())?;
+                let report = modman_core::audio::extract(
+                    &ArchiveSource(&pak),
+                    &out,
+                    filter.as_deref(),
+                    manifest.as_deref().map(std::path::Path::new),
+                )
+                .map_err(|e| e.to_string())?;
+                for w in &report.warnings {
+                    eprintln!("  warning: {w}");
+                }
+                for (asset, why) in report.failed.iter().take(10) {
+                    eprintln!("  failed: {asset}: {why}");
+                }
+                if report.failed.len() > 10 {
+                    eprintln!("  ... {} more failures", report.failed.len() - 10);
+                }
+                eprintln!(
+                    "{}: wrote {} file(s), skipped {} non-sound asset(s), {} failure(s)",
+                    pak_path.display(),
+                    report.written.len(),
+                    report.skipped.len(),
+                    report.failed.len()
+                );
+                written += report.written.len();
+                skipped += report.skipped.len();
+                failed += report.failed.len();
+            }
+            println!(
+                "Extracted {written} sound(s) to {} ({skipped} non-sound asset(s) skipped, {failed} failed)",
+                out.display()
+            );
+            Ok(())
+        }
     }
 }
 

@@ -12,6 +12,7 @@
   - [Web UI — no install needed](#web-ui--no-install-needed)
   - [Downloading & first run](#downloading--first-run)
 - [Translation mods (`.locres`)](#translation-mods-locres)
+- [Game audio (`.ogg`)](#game-audio-ogg)
 - [Documentation](#documentation)
 - [Building](#building)
 - [Usage](#usage)
@@ -150,6 +151,25 @@ modman locres diff Original.locres Mod.locres --csv changes.csv --limit 40
 
 Drop the result into `~mods` and you're done.
 
+## Game audio (`.ogg`)
+
+The game stores its sound as Ogg Vorbis inside the pak, so extraction is a strip
+rather than a transcode:
+
+```bash
+# List the sound assets (with no path, reads the game's own pak)
+modman audio list --filter Dialog
+
+# Write every SoundWave as .ogg, mirroring the asset tree
+modman audio extract -o pw-audio --filter "Dialog/C_M6"
+modman audio extract -o pw-audio --manifest audio.csv    # the whole game
+```
+
+The output mirrors the asset path, so `Assets/Audio/Dialog/C_M6/...` stays
+navigable. The long music tracks are stored streamed, split between the `.uexp`
+and a `.ubulk`; `extract` reassembles them, so each track arrives as one
+complete file rather than a 20 second fragment.
+
 ## Documentation
 
 In-depth guides live in [`docs/`](docs/README.md):
@@ -160,6 +180,8 @@ In-depth guides live in [`docs/`](docs/README.md):
   the CSV format, tips, and binary format notes for tool authors.
 - [**FAQ**](docs/faq.md): install paths, first-run warnings (SmartScreen,
   Gatekeeper), merge conflicts, browser-page privacy.
+- [**Game audio**](docs/audio.md): listing and extracting the game's sounds as
+  `.ogg`, the streamed-track trap, and how to check a result.
 
 ## Building
 

@@ -10,6 +10,8 @@
   notes for tool authors.
 - [**FAQ**](faq.md): install paths, first-run warnings (SmartScreen/Gatekeeper),
   merge conflicts, translation questions, browser-page privacy.
+- [**Game audio**](audio.md): listing and extracting the game's sounds as `.ogg`,
+  the streamed-track trap, and how to check a result.
 
 ## Historical
 
