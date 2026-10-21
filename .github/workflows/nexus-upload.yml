@@ -1,0 +1,82 @@
+name: Nexus upload
+
+# Publishes already-released binaries to their existing file entries on the
+# Nexus mod page through the v3 Upload API (open beta). Reusable from the
+# release workflow and dispatchable on its own, which matters because a release
+# dispatch cannot be repeated once its tag exists.
+#
+# Two things the API dictates:
+#   * `/mod-files/{id}/versions` wants the file's INTERNAL v3 id, not the
+#     game-scoped `file_id` the v1 API returns. Passing the game-scoped id is
+#     rejected with 403 "You do not have permission to upload files to this mod".
+#   * allowed upload types are .rar, .zip, .7z, .exe and .omod. `.tar.gz` is
+#     refused with 422, so every platform ships a .zip. The Unix binaries are
+#     chmod +x'd before zipping, and the docs still tell Linux users to run
+#     `chmod +x modman` because some extractors drop the mode.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version being published, without the leading v (e.g. 0.4.5)"
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, without the leading v (e.g. 0.4.5)"
+        type: string
+        required: true
+
+jobs:
+  upload:
+    name: Nexus (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: "Linux amd64",         asset: modman-linux-amd64,   bin: modman,     file_id: 8187864 }
+          - { label: "Linux arm64",         asset: modman-linux-arm64,   bin: modman,     file_id: 8187867 }
+          - { label: "MacOS amd64 (Intel)", asset: modman-macos-amd64,   bin: modman,     file_id: 8187876 }
+          - { label: "MacOS arm64 (Apple)", asset: modman-macos-arm64,   bin: modman,     file_id: 8187882 }
+          - { label: "Windows arm64",       asset: modman-win-arm64.exe, bin: modman.exe, file_id: 8187885 }
+          - { label: "Windows amd64 (x64)", asset: modman-win-amd64.exe, bin: modman.exe, file_id: 8187891 }
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: v${{ inputs.version }}
+
+      - name: Download the published asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p assets
+          gh release download "v${{ inputs.version }}" \
+            --pattern "${{ matrix.asset }}" --dir assets
+          ls -l assets
+
+      - name: Package
+        id: pack
+        run: |
+          set -euo pipefail
+          mkdir -p pkg
+          cp "assets/${{ matrix.asset }}" "pkg/${{ matrix.bin }}"
+          chmod +x "pkg/${{ matrix.bin }}"
+          cp LICENSE pkg/LICENSE
+          (cd pkg && zip -q -r "../${{ matrix.asset }}.zip" .)
+          echo "file=${{ matrix.asset }}.zip" >> "$GITHUB_OUTPUT"
+          ls -l "${{ matrix.asset }}.zip"
+
+      - name: Upload to Nexus
+        uses: Nexus-Mods/upload-action@v1.0.0-beta.11
+        with:
+          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
+          file_id: ${{ matrix.file_id }}
+          filename: ${{ steps.pack.outputs.file }}
+          version: ${{ inputs.version }}
+          display_name: ${{ matrix.label }}
+          category: main
+          update_mod_version: true
+          archive_existing_version: false

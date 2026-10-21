@@ -284,75 +284,15 @@ jobs:
             --version ${{ needs.bump.outputs.version }} \
             --bump ${{ inputs.bump }}
 
-  # Publishes each built binary to its existing file entry on the Nexus mod page
-  # through the v3 Upload API (open beta). Off by default: set the `nexus_upload`
-  # input when dispatching.
-  #
-  # Archive format follows the platform: .tar.gz for Linux, which keeps the
-  # executable bit, and .zip for Windows and macOS, where Finder and Explorer
-  # open it with a double-click. download-artifact does not preserve file modes,
-  # so the chmod happens here. That is the same reason the release-assets step
-  # chmods the Unix binaries.
-  #
-  # The file ids are the existing entries on mod 875; see the Files tab's
-  # "Advanced" listing. `update_mod_version` moves the page version, and
-  # `archive_existing_version` stays off until the pipeline has been proven once.
-  # The API's own mod id is 15251428868971; it is only needed for the optional
-  # per-version `changelog` field, which is left out for now.
+  # Publishes the release to the Nexus mod page. Off by default: set the
+  # `nexus_upload` input when dispatching. The upload itself lives in its own
+  # workflow because a release dispatch cannot be repeated once its tag exists,
+  # and that one can be dispatched for any published version.
   nexus-upload:
-    name: Nexus upload (${{ matrix.label }})
+    name: Nexus upload
     needs: [bump, build, create-release]
     if: ${{ inputs.nexus_upload }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { label: "Linux amd64",         asset: modman-linux-amd64,   bin: modman,     file_id: 2152, fmt: tar.gz }
-          - { label: "Linux arm64",         asset: modman-linux-arm64,   bin: modman,     file_id: 2153, fmt: tar.gz }
-          - { label: "MacOS amd64 (Intel)", asset: modman-macos-amd64,   bin: modman,     file_id: 2154, fmt: zip }
-          - { label: "MacOS arm64 (Apple)", asset: modman-macos-arm64,   bin: modman,     file_id: 2155, fmt: zip }
-          - { label: "Windows arm64",       asset: modman-win-arm64.exe, bin: modman.exe, file_id: 2156, fmt: zip }
-          - { label: "Windows amd64 (x64)", asset: modman-win-amd64.exe, bin: modman.exe, file_id: 2157, fmt: zip }
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.bump.outputs.sha }}
-
-      - name: Download build artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: ${{ matrix.asset }}
-          path: dl
-
-      - name: Package
-        id: pack
-        run: |
-          set -euo pipefail
-          mkdir -p pkg
-          cp "dl/${{ matrix.bin }}" "pkg/${{ matrix.bin }}"
-          chmod +x "pkg/${{ matrix.bin }}"
-          cp LICENSE pkg/LICENSE
-          case "${{ matrix.fmt }}" in
-            zip)
-              (cd pkg && zip -q -r "../${{ matrix.asset }}.zip" .)
-              echo "file=${{ matrix.asset }}.zip" >> "$GITHUB_OUTPUT"
-              ;;
-            tar.gz)
-              tar -czf "${{ matrix.asset }}.tar.gz" -C pkg "${{ matrix.bin }}" LICENSE
-              echo "file=${{ matrix.asset }}.tar.gz" >> "$GITHUB_OUTPUT"
-              ;;
-          esac
-          ls -l "${{ matrix.asset }}.${{ matrix.fmt }}"
-
-      - name: Upload to Nexus
-        uses: Nexus-Mods/upload-action@v1.0.0-beta.11
-        with:
-          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
-          file_id: ${{ matrix.file_id }}
-          filename: ${{ steps.pack.outputs.file }}
-          version: ${{ needs.bump.outputs.version }}
-          display_name: ${{ matrix.label }}
-          category: main
-          update_mod_version: true
-          archive_existing_version: false
+    uses: ./.github/workflows/nexus-upload.yml
+    with:
+      version: ${{ needs.bump.outputs.version }}
+    secrets: inherit
