@@ -13,7 +13,7 @@
 //! (vanilla + union of extras, first-seen order).
 
 use crate::apply::ApplyError;
-use modman_uasset::walk::{ArrayElem, ByteValue, DataTable, Prop, PropValue, Row};
+use modman_uasset::walk::{ArrayElem, ByteValue, DataTable, Prop, PropValue};
 use std::collections::BTreeMap;
 
 /// The combine output filename. A `combine` input carrying this name is a
@@ -62,7 +62,18 @@ pub fn merge_datatable_overrides(
     let vimp = rd_i32(vua, 65).max(0) as usize;
     let vimp_off = rd_i32(vua, 69).max(0) as usize;
 
-    // Build the merged extras list + per-mod index maps.
+    // Build the merged extras list + per-mod index maps. Name mapping is
+    // STRING-based at every index: mods cooked against a different base
+    // carry a wholly different table order (DB_MF: `A-10/A-10` @0 vs
+    // vanilla's `f15_icon` @0), so positional identity silently re-points
+    // prop tags and FNames at wrong strings — an unwalkable, crashing
+    // table. A name present in vanilla keeps its vanilla index; anything
+    // else appends first-seen (same rule as the content-based import map).
+    let mut vanilla_by_name: std::collections::HashMap<&str, i32> =
+        std::collections::HashMap::with_capacity(vcount);
+    for (k, name) in vdt.names.iter().enumerate() {
+        vanilla_by_name.entry(name.as_str()).or_insert(k as i32);
+    }
     let mut merged_extras: Vec<String> = Vec::new();
     let mut merged_imports: Vec<([u8; 28], usize)> = Vec::new();
     let mut maps: Vec<Vec<i32>> = Vec::new();
@@ -70,32 +81,7 @@ pub fn merge_datatable_overrides(
     let mut dts: Vec<DataTable> = Vec::new();
     for (i, (ua, ue)) in overrides.iter().enumerate() {
         let dt = DataTable::walk_bytes(ua, ue).map_err(|e| ApplyError::Asset(e.to_string()))?;
-        let prefix = vcount.min(dt.names.len());
-        for k in 0..prefix {
-            if dt.names[k] != vdt.names[k] {
-                warnings.push(format!(
-                    "override #{i}: name table diverges from vanilla at index {k} \
-                     ('{}' vs '{}') — merge may be unreliable",
-                    dt.names[k], vdt.names[k]
-                ));
-                break;
-            }
-        }
-        let mut map = Vec::with_capacity(dt.names.len());
-        for (k, name) in dt.names.iter().enumerate() {
-            if k < vcount {
-                map.push(k as i32);
-            } else {
-                let pos = merged_extras
-                    .iter()
-                    .position(|n| n == name)
-                    .unwrap_or_else(|| {
-                        merged_extras.push(name.clone());
-                        merged_extras.len() - 1
-                    });
-                map.push((vcount + pos) as i32);
-            }
-        }
+        let map = map_names(&vanilla_by_name, vcount, &dt.names, &mut merged_extras);
         maps.push(map);
 
         // Import map, CONTENT-based: mods may replace entries in place (the
@@ -177,22 +163,42 @@ pub fn merge_datatable_overrides(
                 }
                 None => true,
             };
-            if !changed {
+            // Fast path only while the row is still IN the merged state.
+            // An earlier mod's deletion pass can remove a row that this mod
+            // re-carries unchanged; skipping it there would leave `order`
+            // naming a row `state` no longer holds (assembly indexes
+            // `state[name]` and panics), and the table would lose a row the
+            // mod ships.
+            if !changed && state.contains_key(&r.name) {
                 continue;
             }
             if !state.contains_key(&r.name) {
                 order.push(r.name.clone());
+                // A row deleted by an earlier mod's deletion pass, then
+                // re-added here, must be seeded with the VANILLA props:
+                // the per-prop loop below skips vanilla-identical props,
+                // and an empty seed would drop them mid-row — shifting the
+                // stream and producing an unwalkable table (the DB_MF
+                // Import_Create crash: FE15's 7-row table deletes rows that
+                // SK35S re-adds). Truly new rows (no vanilla counterpart)
+                // start empty; every prop then counts as changed.
+                let seed: Vec<(String, Vec<u8>)> = vanilla_row
+                    .map(|vr| {
+                        vr.props
+                            .iter()
+                            .enumerate()
+                            .map(|(i, vp)| {
+                                let ve = prop_extent_end(&vr.props, i, vr.end);
+                                (vp.name.clone(), vue[vp.start..ve].to_vec())
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 state.insert(
                     r.name.clone(),
                     RowState {
-                        name_bytes: remap_name_bytes(
-                            &ue[r.start..r.start + 8],
-                            r,
-                            dt,
-                            map,
-                            &mut warnings,
-                        ),
-                        props: Vec::new(),
+                        name_bytes: remap_name_bytes(&ue[r.start..r.start + 8], map, &mut warnings),
+                        props: seed,
                         sources: BTreeMap::new(),
                     },
                 );
@@ -374,6 +380,35 @@ pub fn merge_datatable_overrides(
     }))
 }
 
+/// Map one override's name-table indices into the merged table: a name that
+/// already exists in vanilla keeps its vanilla index; anything else takes the
+/// slot already allocated for it in `extras`, or appends a new one (first-seen
+/// order, so the merged table is `vanilla ++ union-of-extras`).
+///
+/// Never positional: a mod cooked against a different base carries a wholly
+/// different order, and index identity would silently re-point prop tags and
+/// FNames at the wrong strings.
+fn map_names(
+    vanilla_by_name: &std::collections::HashMap<&str, i32>,
+    vcount: usize,
+    names: &[String],
+    extras: &mut Vec<String>,
+) -> Vec<i32> {
+    let mut map = Vec::with_capacity(names.len());
+    for name in names {
+        if let Some(&vi) = vanilla_by_name.get(name.as_str()) {
+            map.push(vi);
+        } else {
+            let pos = extras.iter().position(|n| n == name).unwrap_or_else(|| {
+                extras.push(name.clone());
+                extras.len() - 1
+            });
+            map.push((vcount + pos) as i32);
+        }
+    }
+    map
+}
+
 /// Does this prop reference imports whose merged position moved? A prop's
 /// bytes can be identical to vanilla while its refs point at a REPLACED
 /// import (the F59 skins) — such props must be applied so the refs remap.
@@ -532,17 +567,22 @@ fn prop_extent_end(props: &[Prop], i: usize, row_end: usize) -> usize {
     }
 }
 
-/// The row-name FName bytes with the index remapped.
-fn remap_name_bytes(
-    bytes: &[u8],
-    row: &Row,
-    dt: &DataTable,
-    map: &[i32],
-    warnings: &mut Vec<String>,
-) -> Vec<u8> {
+/// Map the row-name FName's index into the merged name table, leaving the
+/// FName's `number` field untouched.
+///
+/// The index is read from the stored bytes, never searched for by display
+/// name: the walker renders a duplicate row name as `Name_N` (`CF-105_2`),
+/// and `N` lives in the FName's number field, not in the name-table string —
+/// so a positional search over `dt.names` silently misses those rows and
+/// leaves the mod's index in place. In a table with a different order that
+/// index then resolves to an unrelated string, corrupting the row name.
+fn remap_name_bytes(bytes: &[u8], map: &[i32], warnings: &mut Vec<String>) -> Vec<u8> {
     let mut out = bytes.to_vec();
-    if let Some(old) = dt.names.iter().position(|n| n == &row.name) {
-        patch_index_raw(&mut out, 0, old as i32, map, warnings);
+    let old = i32::from_le_bytes(out[0..4].try_into().unwrap());
+    match map.get(old.max(0) as usize) {
+        Some(&new) if old >= 0 && new != old => out[0..4].copy_from_slice(&new.to_le_bytes()),
+        Some(_) => {}
+        None => warnings.push(format!("row name index {old} outside the name table")),
     }
     out
 }
@@ -561,8 +601,39 @@ fn remap_prop_copy(
     warnings: &mut Vec<String>,
 ) -> Vec<u8> {
     let mut out = full[p.start - base..extent_end - base].to_vec();
-    remap_prop(&mut out, p.start, p, dt, map, vimp, imp_map, warnings);
+    // Child lists inside a struct/array are terminated by an FName naming
+    // `None`. That terminator is part of the copied bytes and must be remapped
+    // like any other index — otherwise it resolves to an unrelated string in
+    // the merged table, the walker never sees the terminator, and it reads past
+    // the struct into the next tag (the DB_MF Import_Create crash).
+    let none_idx = dt.names.iter().position(|n| n == "None");
+    remap_prop(
+        &mut out, p.start, p, extent_end, dt, map, vimp, imp_map, none_idx, warnings,
+    );
     out
+}
+
+/// Remap the `None` terminator that closes a child list, if the copied bytes
+/// actually carry it at `term` (an absolute payload offset).
+fn patch_terminator(
+    out: &mut [u8],
+    base: usize,
+    term: usize,
+    none_idx: Option<usize>,
+    map: &[i32],
+    warnings: &mut Vec<String>,
+) {
+    let Some(none_old) = none_idx else {
+        return;
+    };
+    let off = match term.checked_sub(base) {
+        Some(o) if o + 8 <= out.len() => o,
+        _ => return,
+    };
+    let cur = i32::from_le_bytes(out[off..off + 4].try_into().unwrap());
+    if cur == none_old as i32 {
+        patch_index_raw(out, off, none_old as i32, map, warnings);
+    }
 }
 
 /// Remap a package index (negative = import reference). Mods can REPLACE
@@ -595,10 +666,12 @@ fn remap_prop(
     out: &mut [u8],
     base: usize,
     p: &Prop,
+    end: usize,
     dt: &DataTable,
     map: &[i32],
     vimp: usize,
     imp_map: &[i32],
+    none_idx: Option<usize>,
     warnings: &mut Vec<String>,
 ) {
     // Tag: [name FName 8][type FName 8][size i32][arrayIndex i32][...]
@@ -628,17 +701,49 @@ fn remap_prop(
             patch_pkg_ref(out, p.vstart - base, *v, vimp, imp_map, warnings);
         }
         PropValue::Struct { children } => {
-            for c in children {
-                remap_prop(out, base, c, dt, map, vimp, imp_map, warnings);
+            // Each child's bytes end where the next sibling's tag starts; the
+            // last one ends at the struct's own `None` terminator.
+            for (i, c) in children.iter().enumerate() {
+                let cend = match children.get(i + 1) {
+                    Some(next) => next.start,
+                    None => end.saturating_sub(8),
+                };
+                remap_prop(
+                    out, base, c, cend, dt, map, vimp, imp_map, none_idx, warnings,
+                );
             }
+            patch_terminator(out, base, end.saturating_sub(8), none_idx, map, warnings);
         }
         PropValue::Array { items, .. } => {
-            for it in items {
+            for (i, it) in items.iter().enumerate() {
                 match it {
                     modman_uasset::walk::ArrayElem::Struct(props) => {
-                        for c in props {
-                            remap_prop(out, base, c, dt, map, vimp, imp_map, warnings);
+                        // One `None` closes each item's prop list, so an item
+                        // ends where the next item's first tag begins; the
+                        // last item ends at the array payload's end.
+                        let item_end = match items.get(i + 1) {
+                            Some(modman_uasset::walk::ArrayElem::Struct(next)) => {
+                                next.first().map(|q| q.start).unwrap_or(p.vend)
+                            }
+                            _ => p.vend,
+                        };
+                        for (j, c) in props.iter().enumerate() {
+                            let cend = match props.get(j + 1) {
+                                Some(next) => next.start,
+                                None => item_end.saturating_sub(8),
+                            };
+                            remap_prop(
+                                out, base, c, cend, dt, map, vimp, imp_map, none_idx, warnings,
+                            );
                         }
+                        patch_terminator(
+                            out,
+                            base,
+                            item_end.saturating_sub(8),
+                            none_idx,
+                            map,
+                            warnings,
+                        );
                     }
                     modman_uasset::walk::ArrayElem::Prim {
                         value: PropValue::Object(v),
@@ -953,6 +1058,211 @@ mod tests {
             &odt.names[vdt_names(&vua).len()..],
             &mdt.names[vdt_names(&vua).len()..]
         );
+    }
+
+    /// A mod that ships a SUBSET of the vanilla rows (a partial table — the
+    /// FE15 shape) deletes the rest; a later mod that re-carries them must
+    /// restore them COMPLETE.
+    ///
+    /// Regression guard for two distinct failures:
+    ///  * a re-added row whose bytes are vanilla-identical hit the
+    ///    `!changed` fast path, so it never re-entered `state` while
+    ///    `order` (rebuilt from the mod's full row list) still named it —
+    ///    assembly then indexed `state[name]` for a missing key and panicked;
+    ///  * with the row seeded, unchanged props are skipped by design, so an
+    ///    empty seed would emit the row with props missing mid-stream (the
+    ///    DB_MF `Import_Create` corruption).
+    #[test]
+    fn deleted_then_readded_rows_are_restored_complete() {
+        let vua = fixture("DB_LevelList.uasset");
+        let vue = fixture("DB_LevelList.uexp");
+        let vdt = DataTable::walk_bytes(&vua, &vue).unwrap();
+        assert!(vdt.rows.len() >= 3, "fixture needs a few rows");
+        let r0 = &vdt.rows[0];
+        let r0_name = r0.name.clone();
+        let r0_prop_names: Vec<String> = r0.props.iter().map(|p| p.name.clone()).collect();
+
+        // "partial" mod: vanilla with row 0 dropped entirely. The name and
+        // import tables stay vanilla, so only the row list shrinks — but the
+        // uasset's export serial_size and the header's file-size field must
+        // follow, or the walker's integrity check rejects the pair.
+        let mut pue = Vec::with_capacity(vue.len());
+        pue.extend_from_slice(&vue[..r0.start]);
+        pue.extend_from_slice(&vue[r0.end..]);
+        let n = (vdt.rows.len() - 1) as i32;
+        pue[vdt.num_entries_offset..vdt.num_entries_offset + 4].copy_from_slice(&n.to_le_bytes());
+        let mut pua = vua.clone();
+        {
+            let h = modman_uasset::header::PackageHeader::read(&mut std::io::Cursor::new(&vua[..]))
+                .unwrap();
+            let serial_size_off = h.export_offset as usize + 28;
+            pua[serial_size_off..serial_size_off + 8]
+                .copy_from_slice(&(pue.len() as i64).to_le_bytes());
+            let file_size = vua.len() as i32 + pue.len() as i32;
+            pua[169..173].copy_from_slice(&file_size.to_le_bytes());
+        }
+
+        // Case 1: the later mod re-carries the row BYTE-IDENTICAL to vanilla.
+        // Net effect is no change — but it must not panic, and it must not
+        // report a change that loses the row.
+        let out = merge_datatable_overrides(
+            (&vua, &vue),
+            &[(&pua, &pue), (&vua, &vue)],
+            &["partial".to_string(), "full".to_string()],
+        )
+        .expect("merge must not panic on a deleted-then-readded row");
+        if let Some(c) = out {
+            let odt = DataTable::walk_bytes(&c.uasset, &c.uexp).unwrap();
+            assert!(
+                odt.rows.iter().any(|r| r.name == r0_name),
+                "row {r0_name} was re-carried and must be present"
+            );
+        }
+
+        // Case 2: the later mod re-carries it with one edited int prop, so a
+        // real change exists. The re-added row must come out COMPLETE: every
+        // vanilla prop present, not just the edited one.
+        let int_pi = r0
+            .props
+            .iter()
+            .position(|p| matches!(p.value, PropValue::Int(_)))
+            .expect("row 0 needs an int prop");
+        let mut fue = vue.clone();
+        let p = &r0.props[int_pi];
+        fue[p.vstart..p.vstart + 4].copy_from_slice(&424_242i32.to_le_bytes());
+
+        let out2 = merge_datatable_overrides(
+            (&vua, &vue),
+            &[(&pua, &pue), (&vua, &fue)],
+            &["partial".to_string(), "full-edit".to_string()],
+        )
+        .unwrap()
+        .expect("the edited prop is a real change");
+
+        let odt2 = DataTable::walk_bytes(&out2.uasset, &out2.uexp).unwrap();
+        let orow = odt2
+            .rows
+            .iter()
+            .find(|r| r.name == r0_name)
+            .expect("re-added row present");
+        let got: Vec<String> = orow.props.iter().map(|p| p.name.clone()).collect();
+        assert_eq!(
+            got, r0_prop_names,
+            "re-added row must carry every vanilla prop in order"
+        );
+        match &orow.props[int_pi].value {
+            PropValue::Int(v) => assert_eq!(*v, 424_242, "the later mod's edit survived"),
+            other => panic!("not int: {other:?}"),
+        }
+    }
+
+    /// The name map must resolve by STRING at every index. A mod cooked
+    /// against a different base carries the same strings in a different order
+    /// (DB_MF: `A-10/A-10` @0 vs vanilla's `f15_icon` @0); positional mapping
+    /// re-points prop tags and type names at the wrong strings, which is how
+    /// the merged table became unwalkable and crashed the game on load.
+    #[test]
+    fn name_map_resolves_by_string_not_position() {
+        let vanilla = [
+            "f15_icon".to_string(),
+            "AircraftModel".to_string(),
+            "ObjectProperty".to_string(),
+        ];
+        let mut by_name: std::collections::HashMap<&str, i32> = std::collections::HashMap::new();
+        for (k, n) in vanilla.iter().enumerate() {
+            by_name.entry(n.as_str()).or_insert(k as i32);
+        }
+
+        // Same strings, permuted, plus one name vanilla has never seen.
+        let mod_a = vec![
+            "ObjectProperty".to_string(),
+            "A10".to_string(),
+            "AircraftModel".to_string(),
+            "f15_icon".to_string(),
+        ];
+        let mut extras: Vec<String> = Vec::new();
+        let map = map_names(&by_name, vanilla.len(), &mod_a, &mut extras);
+        assert_eq!(
+            map,
+            vec![2, 3, 1, 0],
+            "every vanilla name resolves to its vanilla slot; the unknown one appends"
+        );
+        assert_eq!(extras, vec!["A10".to_string()], "extra recorded first-seen");
+
+        // A second mod re-using the same unknown name must share its slot,
+        // not append a duplicate.
+        let mod_b = vec!["A10".to_string(), "ObjectProperty".to_string()];
+        let map_b = map_names(&by_name, vanilla.len(), &mod_b, &mut extras);
+        assert_eq!(map_b, vec![3, 2]);
+        assert_eq!(extras.len(), 1, "extra reused across mods, not duplicated");
+    }
+
+    /// Row-name FNames are an index plus a `number` field; the walker renders
+    /// duplicates as `Name_N`, so the index must be read from the BYTES — a
+    /// name-table search for the display string misses them. Regression:
+    /// `CF-105_2` / `MiG-21_2` / `AV-8_2` in DB_MF kept the mod's index and
+    /// resolved to unrelated strings in the merged table.
+    #[test]
+    fn duplicate_row_name_index_is_remapped_from_bytes() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&273i32.to_le_bytes());
+        bytes.extend_from_slice(&3i32.to_le_bytes());
+
+        let mut map = vec![0i32; 400];
+        map[273] = 42;
+        let mut warnings = Vec::new();
+        let out = remap_name_bytes(&bytes, &map, &mut warnings);
+        assert_eq!(
+            i32::from_le_bytes(out[0..4].try_into().unwrap()),
+            42,
+            "stored index must be remapped"
+        );
+        assert_eq!(
+            i32::from_le_bytes(out[4..8].try_into().unwrap()),
+            3,
+            "the FName number must be preserved"
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        // Identity mapping leaves the bytes alone.
+        let ident: Vec<i32> = (0..400).collect();
+        assert_eq!(remap_name_bytes(&bytes, &ident, &mut warnings), bytes);
+
+        // An index outside the name table is reported rather than kept.
+        let mut oor = Vec::new();
+        oor.extend_from_slice(&900_000i32.to_le_bytes());
+        oor.extend_from_slice(&0i32.to_le_bytes());
+        let _ = remap_name_bytes(&oor, &map, &mut warnings);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+    }
+
+    /// A struct's child list is closed by a `None` FName taken from the MOD's
+    /// name table. Left unremapped it names an unrelated string in the merged
+    /// table, so the walker reads past the struct into the next tag — the
+    /// DB_MF `Import_Create` crash. Guards the remap of that terminator.
+    #[test]
+    fn struct_child_list_terminator_is_remapped() {
+        let none_old = 475usize;
+        let mut map = vec![0i32; 600];
+        map[none_old] = 137; // "None" sits at 137 in the merged table
+        let mut warnings = Vec::new();
+
+        // [child tag 24 bytes][None terminator 8 bytes]
+        let mut out = vec![0u8; 32];
+        out[24..28].copy_from_slice(&(none_old as i32).to_le_bytes());
+        patch_terminator(&mut out, 0, 24, Some(none_old), &map, &mut warnings);
+        assert_eq!(
+            i32::from_le_bytes(out[24..28].try_into().unwrap()),
+            137,
+            "the terminator must point at the merged table's None"
+        );
+
+        // A non-None value at that position must be left alone.
+        let mut other = vec![0u8; 32];
+        other[24..28].copy_from_slice(&7i32.to_le_bytes());
+        patch_terminator(&mut other, 0, 24, Some(none_old), &map, &mut warnings);
+        assert_eq!(i32::from_le_bytes(other[24..28].try_into().unwrap()), 7);
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     fn vdt_names(ua: &[u8]) -> Vec<String> {

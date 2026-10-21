@@ -2,9 +2,10 @@
 
 ## [v0.4.5] — 2026-10-12
 
-**Quieter, truer combine reports.** Two fixes driven by a real-world mod set
-(5 aircraft mods + a stale output) whose report flooded with ~150 phantom
-conflicts and 432 pass-through warnings.
+**Quieter, truer combine reports — and tables that load.** Fixes driven by a
+real-world mod set (5 aircraft mods + a stale output) whose report flooded with
+~150 phantom conflicts and 432 pass-through warnings, and whose merged
+`DB_MF_Aircraft` crashed the game with an `Import_Create` error on load.
 
 ### Fixed
 - `modman combine` no longer merges its own previous output: an input named
@@ -20,6 +21,19 @@ conflicts and 432 pass-through warnings.
   still conflict, and the winner's ref still remaps as before.
 - Conflict messages for arrays/structs now summarize (`ObjectProperty[5]
   f15_59_01,f15_01,…`) instead of printing `'' vs ''`.
+- `combine` now produces tables the game can actually load when a mod was
+  cooked against a different name-table base. Three defects, all from trusting
+  positional index identity: name indices are resolved by string (a mod's
+  `A-10/A-10` at 0 against vanilla's `f15_icon` at 0 used to re-point every
+  property tag), the `None` terminator that closes a struct/array child list is
+  remapped (it kept the mod's index, read as an unrelated string, and sent the
+  loader past the struct — the `DB_MF_Aircraft` crash), and row-name indices are
+  read from the stored bytes instead of searched by display name (duplicate rows
+  such as `CF-105_2` carry their number in the FName and were silently skipped).
+- A row that one mod's deletion pass removes and a later mod re-carries is
+  restored instead of vanishing: it re-enters the merge seeded with the vanilla
+  properties, so vanilla-identical fields survive and row assembly no longer
+  panics on a row it cannot find.
 
 ## [v0.4.4] — 2026-10-11
 
