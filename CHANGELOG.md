@@ -13,7 +13,7 @@ browser engine and no terminal.
   conflict report and installs into `~mods` with a timestamped backup. Archive
   support is pure Rust (`rars` Apache-2.0, `sevenz-rust` MIT, `zip` MIT), so
   nothing has to be installed on the machine, on Windows or anywhere else. egui,
-  no browser engine, ~17 MB binary.
+  no browser engine, 10.7 MB binary.
 - `modman audio list` prints the SoundWave assets in a pak, or in the game's own
   pak when no path is given, with `--filter` to narrow by path substring.
 - `modman audio extract` writes each SoundWave to a mirrored tree of `.ogg`
@@ -60,8 +60,13 @@ browser engine and no terminal.
   with aircraft addons of about 140 MB each, 4 merged and 6 ran out, so roughly
   500 MB of mod paks is a safe batch. The page hint, the out-of-memory message
   and the guide all say so, and point at the desktop build, which does the same
-  29-mod set in 17 seconds from the command line or under a minute in the GUI
-  including archive extraction.
+  29-mod set in about 10 seconds from the command line, or under a minute in the
+  GUI including archive extraction.
+- Release binaries are built with thin LTO, one codegen unit and stripped
+  symbols, from a workspace-level profile. The GUI went from 17.2 MB to 10.7 MB
+  and the CLI from 3.9 MB to 3.1 MB, and the 29-mod merge got faster (15 s to
+  9 s). The profile that had been sitting in the GUI crate's own manifest was
+  silently ignored: cargo reads profiles only at the workspace root.
 
 ### Fixed
 - The browser page gave up after 200 reads from the game pak and could stop
