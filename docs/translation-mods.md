@@ -1,7 +1,7 @@
 # Translation mods (`.locres`)
 
-Project Wingman's text — menus, missions, dialogue, everything — lives in Unreal
-localization binaries at:
+All of Project Wingman's text, from menus through missions and dialogue, lives in
+Unreal localization binaries at:
 
 ```
 ProjectWingman/Content/Localization/ProjectWingman/<lang>/ProjectWingman.locres
@@ -33,8 +33,8 @@ modman locres read ProjectWingman.locres -o translations.csv
 modman locres pak ProjectWingman.locres translations.csv --lang en-US -o MyTranslation_P.pak
 ```
 
-Drop the result in `~mods`. That's the whole process — the pak contains one file, the
-patched locres, staged at exactly the right path.
+Drop the result in `~mods`. The pak contains one file, the patched locres, staged at
+exactly the right path.
 
 ## Reviewing what a mod changes
 
@@ -50,21 +50,21 @@ and can dump the full list to CSV.
 ## Tips
 
 - **`--dedup`** merges identical strings into single entries (summing reference
-  counts) — the compaction other community tools use. A rebuild of an existing mod
+  counts), the same compaction other community tools use. A rebuild of an existing mod
   with `--dedup` comes out byte-identical to the original (verified against the
   famous ":3" mod).
 - **Shared strings**: some strings are referenced by several keys. Editing one key's
-  translation also affects the other keys pointing at the same string — `locres diff`
-  shows exactly which entries changed.
+  translation also affects the other keys pointing at the same string, and
+  `locres diff` shows exactly which entries changed.
 - **Patch mode preserves, it doesn't rebuild**: the game's own hashes and ordering are
   kept, so the engine finds every entry exactly as before. Rebuilding from scratch is
-  not needed and not offered — preservation is strictly safer.
+  not needed and not offered; preservation is strictly safer.
 - **Test in-game**: a partial translation (patch a handful of visible menu strings)
   is the quickest way to confirm a build works before doing 10,000 lines.
 
 ## Format notes (v3, the optimized layout)
 
-For anyone writing their own tooling — the file layout as shipped:
+For anyone writing their own tooling, here is the file layout as shipped:
 
 ```
 [16] magic   0E 14 74 75 67 4A 03 FC 4A 15 90 9D C3 37 7F 1B
@@ -84,9 +84,9 @@ string table (at the offset):
 
 Three subtleties that byte-fidelity depends on:
 
-1. **Empty FStrings are serialized as length 1 + a null byte** (5 bytes) — not as
+1. **Empty FStrings are serialized as length 1 + a null byte** (5 bytes), not as
    length 0 (4 bytes).
-2. **Reference counts are real** — a string used by 9 keys has count 9.
+2. **Reference counts are real**: a string used by 9 keys has count 9.
 3. **FString length rule**: positive length = UTF-8 bytes + 1; negative length =
    UTF-16 code units + 1.
 

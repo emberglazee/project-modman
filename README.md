@@ -1,6 +1,6 @@
 # Project Modman
 
-> A Rust modding utility for Project Wingman (PW) — inspired by Project Sicario.
+> A Rust modding utility for Project Wingman (PW), inspired by Project Sicario.
 
 ## Contents
 
@@ -29,21 +29,21 @@
 - **HexPatch engine** (`filePatches`) with the C# stream-walk semantics and the `.uexp` length auto-correct
 - **Merge pipeline**: component model (embeddedPresets → loosePresets → sicarioRequests), engine-major phases, `.uexp`/`.uasset` sidecar handling
 - **`build`** writes a real merged `SicarioMerge_P.pak`; **`preset-pack`** builds standalone preset packs with the preset embedded at `Content/sicario/`; **`--report`** writes the C#-identical merge report
-- **`combine`** merges conflicting override mods that carry **no Sicario metadata** (the common case for 2024+ mods) — three-way, field-level, with a full conflict report
+- **`combine`** merges conflicting override mods that carry **no Sicario metadata** (the common case for 2024+ mods), three-way and field-level, with a full conflict report
 
 In-game acceptance passed (SPEAR Unlock + Improved Chimera verified in Project Wingman 2.1.1A).
 
 ## V1 Scope — 1:1 parity with the Project Sicario merger
 
-**The v1 goal is 1:1 parity with the Sicario merger — no less.**
+**The v1 goal is 1:1 parity with the Sicario merger.**
 
 A drop-in replacement for the Sicario merger (`SicarioPatch.Loader`) against Project Wingman 2.1.1A / UE 4.27 / Pak V11:
 
 - **Inputs:** identical `.dtm`/`.dtp` WingmanMod JSON, with `_vars`/`_inputs` templating.
 - **Patch semantics:** every Sicario fragment type, every Sicario patch type, identical matching and value behavior.
 - **Merge semantics:** identical multi-mod merging to Sicario's engine.
-- **Output:** a Pak V3 mod pack (mount `../../../`) for the game's `~mods/` directory — same as the merger.
-- **Zero .NET dependency** — single native binary.
+- **Output:** a Pak V3 mod pack (mount `../../../`) for the game's `~mods/` directory, same as the merger.
+- **Zero .NET dependency**: a single native binary.
 
 ## Parity status
 
@@ -75,52 +75,52 @@ PSM skin paks (`ProjectWingman/Content/Assets/Skins/<aircraft-row>/…`), live-v
 ## Merging mods without metadata (`combine`)
 
 Project Sicario's merge metadata (`.dtp` presets, embedded requests) was never updated for
-Project Wingman 2.0 / UE 4.27, so most 2024+ mods are plain file overrides — and when two
-of them edit the same uasset, the game loads only one. `modman combine` merges them anyway:
+Project Wingman 2.0 / UE 4.27, so most 2024+ mods are plain file overrides. When two of
+them edit the same uasset, the game loads only one. `modman combine` merges them anyway:
 
 ```bash
 modman combine <pak-or-dir...> --install-path <game> --output <dir>
 ```
 
 - DataTables are merged **three-way** (vanilla + each mod's delta, later mods win) at
-  **field level** — different fields of the same row all survive; genuine same-field
+  **field level**: different fields of the same row all survive, and genuine same-field
   clashes resolve later-wins and are reported.
 - Mods that add object references (textures, materials) keep working: import-table
   entries are carried with all FName and package-index references remapped.
 - Non-datatable files (maps, models, textures) pass through single-winner, with a warning
-  when two mods fight over one — those file types genuinely cannot be combined.
+  when two mods fight over one. Those file types cannot be combined.
 - Every run ends with a **merge report**: the order, every conflict (with mod names and
   values), and warnings.
 
 ### Web UI — no install needed
 
-**<https://emberglazee.github.io/project-modman/>** — the same merge engine, compiled to
-WebAssembly and running entirely in your browser:
+**<https://emberglazee.github.io/project-modman/>**: the same merge engine compiled to
+WebAssembly, running entirely in your browser:
 
 - Drop your conflicting `*_P.pak` files, point at your game's
-  `pakchunk0-WindowsNoEditor.pak`, hit merge, download the combined pak.
-- **Nothing is uploaded** — the game pak is read in place (a few MB of it, even from a
-  ~16 GB file) via the browser's File API; the page makes zero network requests after
-  loading.
+  `pakchunk0-WindowsNoEditor.pak`, merge, and download the combined pak.
+- **Nothing is uploaded.** The game pak is read in place through the browser's File API
+  (a few MB of it, even from a ~16 GB file), and the page makes zero network requests
+  after loading.
 - Shows the same merge report (order + conflicts) with a friendly UI.
 
 ### Downloading & first run
 
-- **Windows** — double-clicking `modman.exe` shows a welcome screen (it pauses so you
-  can read it) pointing at the browser option; the CLI itself takes arguments
-  (`modman --help` in a terminal). Windows may show a SmartScreen prompt for a new
+- **Windows**: double-clicking `modman.exe` shows a welcome screen (it pauses so you
+  can read it) pointing at the browser option; with arguments it runs as a normal CLI
+  (`modman --help`). Windows may show a SmartScreen prompt for a new
   unsigned binary: *More info → Run anyway*.
-- **macOS** — the binaries are unsigned, so Gatekeeper blocks the first run:
-  right-click → Open once, or `xattr -d com.apple.quarantine modman`.
-- **Linux** — `chmod +x modman` and run it from a terminal.
-- Or skip all of that: the **web page**, or the **offline `modman-merge.html`**
-  (one file, double-click it — no install, no server, no network).
+- **macOS**: the binaries are unsigned, so Gatekeeper blocks the first run. Right-click
+  → Open once, or run `xattr -d com.apple.quarantine modman`.
+- **Linux**: `chmod +x modman` and run it from a terminal.
+- Or skip all of that: the **web page**, or the **offline `modman-merge.html`**, one file
+  you double-click with no install, no server and no network.
 
 ## Translation mods (`.locres`)
 
 The game's text lives in Unreal localization binaries at
 `ProjectWingman/Content/Localization/ProjectWingman/<lang>/ProjectWingman.locres`.
-modman reads and patches them with full structural fidelity — every namespace/key
+modman reads and patches them with full structural fidelity. Every namespace and key
 hash, entry order and string reference count is preserved, so in-game lookups never
 miss. (Verified: parse → write reproduces all nine shipped language files
 byte-for-byte.)
@@ -148,17 +148,17 @@ modman locres pak ProjectWingman.locres translations.csv --lang en-US -o MyTrans
 modman locres diff Original.locres Mod.locres --csv changes.csv --limit 40
 ```
 
-Drop the result into `~mods` — done.
+Drop the result into `~mods` and you're done.
 
 ## Documentation
 
 In-depth guides live in [`docs/`](docs/README.md):
 
-- [**Merging conflicting mods**](docs/merging-mods.md) — the no-metadata merge,
+- [**Merging conflicting mods**](docs/merging-mods.md): the no-metadata merge,
   conflict semantics, what can and can't merge, reading the report.
-- [**Translation mods**](docs/translation-mods.md) — the full `.locres` workflow,
+- [**Translation mods**](docs/translation-mods.md): the full `.locres` workflow,
   the CSV format, tips, and binary format notes for tool authors.
-- [**FAQ**](docs/faq.md) — install paths, first-run warnings (SmartScreen,
+- [**FAQ**](docs/faq.md): install paths, first-run warnings (SmartScreen,
   Gatekeeper), merge conflicts, browser-page privacy.
 
 ## Building

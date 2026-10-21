@@ -1,48 +1,50 @@
 # Changelog
 
-## [v0.4.5] — 2026-10-12
+## [v0.4.5] — 2026-10-21
 
-**Quieter, truer combine reports — and tables that load.** Fixes driven by a
-real-world mod set (5 aircraft mods + a stale output) whose report flooded with
-~150 phantom conflicts and 432 pass-through warnings, and whose merged
-`DB_MF_Aircraft` crashed the game with an `Import_Create` error on load.
+**Combine reports are quieter and merged tables load.** A real mod set (5
+aircraft mods plus a stale output) produced ~150 phantom conflicts and 432
+pass-through warnings, and its merged `DB_MF_Aircraft` crashed the game with an
+`Import_Create` error on load.
 
 ### Fixed
-- `modman combine` no longer merges its own previous output: an input named
-  `SicarioCombine_P.pak` is skipped with a note (in the order list, the
-  warnings, and a stderr line) instead of flooding the report — a merged
-  table's shifted import indices made every vanilla row read as "changed".
-  The browser page renders the skip the same way (`skipped` in the report
-  JSON).
-- Same-field conflict comparison is now semantic for object references: two
-  mods whose refs resolve to the same `(ObjectName, ClassName)` in their own
-  tables no longer conflict just because the raw import numbers differ
-  (`-497` vs `-485`, both `F_15E_Cockpit`). Genuinely different targets
-  still conflict, and the winner's ref still remaps as before.
-- Conflict messages for arrays/structs now summarize (`ObjectProperty[5]
-  f15_59_01,f15_01,…`) instead of printing `'' vs ''`.
-- `combine` now produces tables the game can actually load when a mod was
-  cooked against a different name-table base. Three defects, all from trusting
-  positional index identity: name indices are resolved by string (a mod's
-  `A-10/A-10` at 0 against vanilla's `f15_icon` at 0 used to re-point every
-  property tag), the `None` terminator that closes a struct/array child list is
-  remapped (it kept the mod's index, read as an unrelated string, and sent the
-  loader past the struct — the `DB_MF_Aircraft` crash), and row-name indices are
-  read from the stored bytes instead of searched by display name (duplicate rows
-  such as `CF-105_2` carry their number in the FName and were silently skipped).
-- A row that one mod's deletion pass removes and a later mod re-carries is
-  restored instead of vanishing: it re-enters the merge seeded with the vanilla
-  properties, so vanilla-identical fields survive and row assembly no longer
-  panics on a row it cannot find.
+- `modman combine` skips a previous run's output. An input named
+  `SicarioCombine_P.pak` gets a note in the order list, the warnings and stderr,
+  and no longer floods the report. A merged table's shifted import indices made
+  every vanilla row read as "changed". The browser page shows the skip the same
+  way, as `skipped` in the report JSON.
+- Conflicts on object references are compared by target, not by raw import
+  number. Two mods whose refs resolve to the same `(ObjectName, ClassName)` in
+  their own tables no longer conflict just because one says `-497` and the other
+  `-485` for the same `F_15E_Cockpit`. Different targets still conflict, and the
+  winner's reference still remaps.
+- Arrays and structs now show a summary of the conflicting value, such as
+  `ObjectProperty[5] f15_59_01,f15_01,…`, where the message used to read
+  `'' vs ''`.
+- `combine` now produces tables the game can load when a mod was cooked against
+  a different name-table base. Three places assumed index positions were shared
+  between the two tables:
+  - name indices are resolved by string. A mod's `A-10/A-10` at position 0 used
+    to be read as vanilla's `f15_icon`, which re-pointed every property tag;
+  - the `None` terminator that closes a struct or array child list is remapped.
+    Before, it kept the mod's index, resolved to an unrelated string, and the
+    loader read past the struct. That is the `DB_MF_Aircraft` crash;
+  - row-name indices come from the stored bytes. Duplicate rows such as
+    `CF-105_2` carry their number in the `FName`, so a search by display name
+    missed them.
+- A row that one mod's deletion pass removes and a later mod re-carries now
+  comes back. It re-enters the merge with the vanilla properties as its base, so
+  fields identical to vanilla survive and row assembly no longer panics on a row
+  it cannot find.
 
 ### Added
-- `VIRUSTOTAL.md` ships with every release: the release job scans all six
-  binaries and attaches the result, so a download can be checked before it is
-  run. Builds scan their platform binaries too and report in the run summary.
-  The scan looks a file up by SHA-256 first and only uploads an unknown hash
-  (the public API allows 4 requests a minute and 500 a day), and a detection is
-  reported rather than fatal — one heuristic flagging an unsigned binary must
-  not block a release.
+- `VIRUSTOTAL.md` ships with every release. The release job scans all six
+  binaries and attaches the result, so a download can be checked before it runs,
+  and builds scan their platform binaries and report in the run summary. The
+  scan looks a file up by SHA-256 first and uploads only an unknown hash (the
+  public API allows 4 requests a minute and 500 a day). A detection is reported
+  and does not fail the job: one heuristic flagging an unsigned binary should not
+  block a release.
 
 ## [v0.4.4] — 2026-10-11
 

@@ -82,7 +82,7 @@ for (const [zone, handler] of [[modDrop, addModFiles], [gameDrop, null]]) {
 
 gameFileEl.addEventListener('change', () => {
   gameFile = gameFileEl.files[0] || null;
-  gameInfo.textContent = gameFile ? `${gameFile.name} — ${fmtBytes(gameFile.size)}` : '';
+  gameInfo.textContent = gameFile ? `${gameFile.name} (${fmtBytes(gameFile.size)})` : '';
   refreshUi();
 });
 
@@ -144,8 +144,8 @@ async function runMerge() {
   } catch (e) {
     setError(`Merge failed: ${e}
 
-This is a bug — the browser console (F12) now logs which internal step failed, and that line is what helps us fix it: github.com/emberglazee/project-modman/issues
-If the console mentions memory: close other tabs, reload, and retry — very large mod collections may need the modman CLI instead.`);
+This is a bug. The browser console (F12) logs which internal step failed, and that line is what helps us fix it. Please report it at github.com/emberglazee/project-modman/issues
+If the console mentions memory: close other tabs, reload, and retry. Very large mod collections may need the modman CLI instead.`);
   } finally {
     mergeBtn.disabled = false;
     refreshUi();
@@ -160,17 +160,17 @@ function showReport(report) {
   let html = '<h3>Merge order <span class="dim">(later entries win on conflicts)</span></h3><ol class="order">';
   for (const label of report.order) {
     html += skipped.has(label)
-      ? `<li>${escapeHtml(label)} <span class="dim">(skipped — previous output)</span></li>`
+      ? `<li>${escapeHtml(label)} <span class="dim">(skipped: previous output)</span></li>`
       : `<li>${escapeHtml(label)}</li>`;
   }
   html += '</ol>';
 
   if (skipped.size) {
-    html += '<p class="warn">Skipped a previous combine output (SicarioCombine_P.pak) — merge the original mod paks instead.</p>';
+    html += '<p class="warn">Skipped a previous combine output (SicarioCombine_P.pak). Merge the original mod paks instead.</p>';
   }
 
   if (report.conflicts && report.conflicts.length) {
-    html += '<h3 class="warn">Conflicts — later mod won</h3><ul class="conflicts">';
+    html += '<h3 class="warn">Conflicts (later mod won)</h3><ul class="conflicts">';
     for (const c of report.conflicts) html += `<li>${escapeHtml(c)}</li>`;
     html += '</ul>';
   } else {
