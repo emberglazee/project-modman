@@ -24,11 +24,17 @@ for (const [name, text] of [['glue', glue], ['app', app]]) {
   if (text.includes('</script')) throw new Error(`${name} contains </script`);
 }
 
+// Tolerant of a cache-busting query on the script tags (`app.js?v=0.5.0`):
+// the hosted page uses one, and a literal match here silently stopped matching.
+const SCRIPT_WASM = /<script src="pkg\/modman_wasm\.js(?:\?[^"]*)?"><\/script>/;
+const SCRIPT_APP = /<script src="app\.js(?:\?[^"]*)?"><\/script>/;
+const LINK_CSS = /<link rel="stylesheet" href="style\.css(?:\?[^"]*)?">/;
+
 let out = html
-  .replace('<link rel="stylesheet" href="style.css">', () => `<style>\n${css}\n</style>`)
-  .replace('<script src="pkg/modman_wasm.js"></script>', '')
+  .replace(LINK_CSS, () => `<style>\n${css}\n</style>`)
+  .replace(SCRIPT_WASM, '')
   .replace(
-    '<script src="app.js"></script>',
+    SCRIPT_APP,
     () =>
       `<script>window.MODMAN_WASM_BASE64 = "${wasmB64}";</script>\n` +
       `<script>\n${glue}\n</script>\n` +
@@ -36,6 +42,9 @@ let out = html
   );
 
 if (!out.includes('MODMAN_WASM_BASE64')) throw new Error('inline replacement failed');
+if (SCRIPT_APP.test(out) || SCRIPT_WASM.test(out)) {
+  throw new Error('a script tag was left un-inlined; index.html changed shape');
+}
 
 mkdirSync(join(web, 'dist'), { recursive: true });
 const outPath = join(web, 'dist', 'modman-merge.html');

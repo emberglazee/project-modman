@@ -29,6 +29,11 @@ and writes each SoundWave out as the `.ogg` stream it already contains.
   (`trying version V11 failed: got 111, which is not a boolean`) with no
   indication of what to do. That now reads "One of the files is not a mod pak"
   with the three usual causes.
+- The browser's real ceiling is now measured rather than guessed, and stated in
+  the page, the error message and the guide: with aircraft addons of about
+  140 MB each, 4 merged and 6 ran out, so roughly 500 MB of mod paks is a safe
+  batch. The same 29-mod set (4.4 GB) merges into a 4.3 GB pak in 17 seconds
+  with the desktop build, which is what the out-of-memory message points at.
 - `modman audio list` prints the SoundWave assets in a pak, or in the game's own
   pak when no path is given, with `--filter` to narrow by path substring.
 - `modman audio extract` writes each SoundWave to a mirrored tree of `.ogg`

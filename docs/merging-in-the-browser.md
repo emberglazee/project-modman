@@ -49,15 +49,20 @@ To install:
 
 ## When it says it ran out of memory
 
-Browsers cap how much memory a page may use. A dozen aircraft addons at 40 to
-50 MB each can reach that cap, especially with other tabs open.
+Browsers cap how much memory a page may use, and the merger holds the mods and
+the merged result at the same time. Measured with aircraft addons of about
+140 MB each: four merged fine, six ran out. Treat roughly 500 MB of mod paks as
+a safe batch and expect trouble past 800 MB.
 
 In order of effort:
 
-1. Close other tabs, reload, and try again.
-2. Merge in batches: merge three mods, then add the result to the next round
-   along with three more. The merged file behaves like any other mod.
-3. Use the desktop build. It has no such limit and takes one command. See
+1. Merge in batches of three or four, then add the merged file to the next
+   round along with the next few mods. The merged file behaves like any other
+   mod.
+2. Close other tabs, reload, and try again. Other pages compete for the same
+   memory.
+3. Use the desktop build. The same 29-mod set (4.4 GB of paks) merged into a
+   4.3 GB pak in 17 seconds there. See
    [the command line walkthrough](command-line-walkthrough.md).
 
 The error box tells you which of these applies, and the diagnostics text inside

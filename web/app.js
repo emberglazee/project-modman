@@ -119,18 +119,18 @@ function classifyError(e) {
   const raw = String((e && e.message) || e || '');
   const run = lastRun || {};
 
-  if (/out of memory|allocation failed|Cannot enlarge memory|memory access out of bounds|Array buffer allocation/i.test(raw)) {
+  if (/out of memory|allocation failed|Cannot enlarge memory|memory access out of bounds|Array buffer allocation|^unreachable$|RuntimeError/i.test(raw)) {
     return {
       title: 'Not enough memory for this mod set',
       body:
         `The browser ran out of memory while merging ${run.mods ? run.mods.length : 'these'} mods. ` +
         `That is a limit of running the merger inside a web page, not a problem with your mods.\n\n` +
         `What to try, in order:\n` +
-        `1. Close other tabs and apps, then reload this page and try again.\n` +
-        `2. Merge fewer mods at a time: merge two, then add the result to the next round.\n` +
-        `3. Use the desktop build instead. It has no such limit and takes the same arguments:\n` +
-        `   modman combine *.pak --install-path "C:\\...\\Project Wingman" --output out\n` +
-        `   See docs/merging-in-the-browser.md in the project for a step-by-step walkthrough.`,
+        `1. Merge in smaller batches: 3 or 4 aircraft-sized mods at a time, then add the merged file to the next round.\n` +
+        `2. Close other tabs and apps, reload this page, and try again.\n` +
+        `3. Use the desktop build instead. It has no such limit: the same 29-mod set merged in 17 seconds there.\n` +
+        `   modman combine "C:\\...\\~mods\\*.pak" --install-path "C:\\...\\Project Wingman" --output out\n` +
+        `   See docs/command-line-walkthrough.md for the step-by-step version.`,
     };
   }
   if (/invalid|magic|not a pak|unsupported|bad header|version/i.test(raw)) {
@@ -258,9 +258,11 @@ async function runMerge() {
 
   try {
     const totalModBytes = modFiles.reduce((a, f) => a + f.size, 0);
-    if (totalModBytes > 3_000_000_000) {
+    // Measured: ~870 MB of mod paks already exhausts a Chromium tab during the
+    // merge, because the set is held in memory twice (inputs, then output).
+    if (totalModBytes > 1_500_000_000) {
       throw new Error(
-        `out of memory: this set is ${fmtBytes(totalModBytes)}, which is more than a browser can hold in memory`,
+        `out of memory: this set is ${fmtBytes(totalModBytes)}; a browser tab cannot hold that much`,
       );
     }
 
