@@ -55,10 +55,15 @@ jobs:
           if [ -d download ]; then
             while IFS= read -r f; do
               dir=$(basename "$(dirname "$f")")
+              name="$dir"
               case "$f" in
-                *.exe) cp "$f" "scan/$dir.exe" ;;
-                *)     cp "$f" "scan/$dir" ;;
+                *.exe)
+                  # Artifact names already carry the extension (modman-win-amd64.exe);
+                  # only add it when the artifact name lacks one.
+                  case "$dir" in *.exe) ;; *) name="$dir.exe" ;; esac
+                  ;;
               esac
+              cp "$f" "scan/$name"
             done < <(find download -type f \( -name modman -o -name 'modman.exe' \))
           fi
           if [ -n "${{ inputs.paths }}" ]; then
