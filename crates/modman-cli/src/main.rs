@@ -481,7 +481,7 @@ fn main() {
 
                     // Apply the template pipeline (vars + enableSteps + patch render).
                     for m in &mut all_mods {
-                        modman_core::template::apply_variables_to_mod(m, &inputs);
+                        modman_core::templating::apply_variables_to_mod(m, &inputs);
                     }
 
                     if let Some(out_dir) = output.as_ref() {
@@ -838,7 +838,7 @@ fn main() {
                 let mut mods = preset.mods.clone();
                 let inputs = preset.mod_parameters.clone();
                 for m in &mut mods {
-                    modman_core::template::apply_variables_to_mod(m, &inputs);
+                    modman_core::templating::apply_variables_to_mod(m, &inputs);
                 }
                 let mod_refs: Vec<&modman_core::manifest::WingmanMod> = mods.iter().collect();
                 // The preset file itself rides along at Content/sicario

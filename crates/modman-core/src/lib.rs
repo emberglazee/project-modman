@@ -20,7 +20,6 @@ pub mod objectref;
 pub mod patch;
 pub mod resolver;
 pub mod rowops;
-pub mod template;
 pub mod templating;
 
 pub fn version() -> &'static str {

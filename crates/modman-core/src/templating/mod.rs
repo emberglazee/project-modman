@@ -19,6 +19,10 @@
 
 use std::collections::HashMap;
 
+pub mod apply;
+
+pub use apply::{apply_variables_to_mod, render_mod_variables};
+
 pub type Vars = HashMap<String, String>;
 
 /// Render a template string the way the C# merger does.

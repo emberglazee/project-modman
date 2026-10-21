@@ -17,8 +17,8 @@
 
 use std::collections::HashMap;
 
+use super::{render, Vars};
 use crate::manifest::{FilePatch, Patch, WingmanMod};
-use crate::templating::{self, Vars};
 
 /// Render the mod's `_vars` map into a lookup table.
 pub fn render_mod_variables(modm: &WingmanMod, inputs: &Vars) -> Vars {
@@ -27,7 +27,7 @@ pub fn render_mod_variables(modm: &WingmanMod, inputs: &Vars) -> Vars {
     keys.sort();
     for key in keys {
         let raw = &modm.variables[key];
-        let value = templating::render(raw, inputs, &rendered);
+        let value = render(raw, inputs, &rendered);
         rendered.insert(key.clone(), value);
     }
     rendered
@@ -38,30 +38,30 @@ fn set_enabled(name: &str, steps: &HashMap<String, String>, inputs: &Vars, vars:
     let Some(cond) = steps.get(name) else {
         return true;
     };
-    let rendered = templating::render(cond, inputs, vars);
+    let rendered = render(cond, inputs, vars);
     rendered.trim().parse::<bool>().unwrap_or(true)
 }
 
 fn render_file_patch(patch: &mut FilePatch, inputs: &Vars, vars: &Vars) {
     if let Some(v) = patch.value.clone() {
-        patch.value = Some(templating::render(&v, inputs, vars));
+        patch.value = Some(render(&v, inputs, vars));
     }
     if let Some(t) = patch.template.clone() {
-        patch.template = Some(templating::render(&t, inputs, vars));
+        patch.template = Some(render(&t, inputs, vars));
     }
     if let Some(w) = &mut patch.window {
         if let Some(a) = w.after.clone() {
-            w.after = Some(templating::render(&a, inputs, vars));
+            w.after = Some(render(&a, inputs, vars));
         }
         if let Some(b) = w.before.clone() {
-            w.before = Some(templating::render(&b, inputs, vars));
+            w.before = Some(render(&b, inputs, vars));
         }
     }
 }
 
 fn render_asset_patch(patch: &mut Patch, inputs: &Vars, vars: &Vars) {
-    patch.value = templating::render(&patch.value.clone(), inputs, vars);
-    patch.template = templating::render(&patch.template.clone(), inputs, vars);
+    patch.value = render(&patch.value.clone(), inputs, vars);
+    patch.template = render(&patch.template.clone(), inputs, vars);
 }
 
 /// Apply the full template pipeline to a mod in place.

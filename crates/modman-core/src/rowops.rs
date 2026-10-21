@@ -49,7 +49,7 @@ pub fn apply_length_changing(
     modm: &WingmanMod,
     target: &str,
 ) -> Result<LengthChangingResult, ApplyError> {
-    // Templating is applied by the pipeline (template::apply_variables_to_mod)
+    // Templating is applied by the pipeline (templating::apply_variables_to_mod)
     // before merging; the C# engines never re-render.
     let Some(sets) = modm.asset_patches.get(target) else {
         return Err(ApplyError::Unsupported(format!("no patches for {target}")));
@@ -550,7 +550,7 @@ mod tests {
         let req = parse_meta_request_json(&raw).unwrap();
         let mut modm = req.request.mods[0].clone();
         // The pipeline renders before merging (C# `PatchTemplateBehaviour`).
-        crate::template::apply_variables_to_mod(&mut modm, &crate::templating::Vars::new());
+        crate::templating::apply_variables_to_mod(&mut modm, &crate::templating::Vars::new());
         let modm = &modm;
 
         let dt = DataTable::load(fixture_stem()).unwrap();

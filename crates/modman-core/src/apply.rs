@@ -43,7 +43,7 @@ pub fn plan_same_size_edits(
     modm: &WingmanMod,
     target: &str,
 ) -> Result<Vec<PlannedEdit>, ApplyError> {
-    // Templating is applied by the pipeline (template::apply_variables_to_mod)
+    // Templating is applied by the pipeline (templating::apply_variables_to_mod)
     // before merging; the C# engines never re-render.
     let mut out = Vec::new();
     let Some(sets) = modm.asset_patches.get(target) else {

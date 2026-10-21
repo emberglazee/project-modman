@@ -279,8 +279,8 @@ mod tests {
             .remove(0);
         // The pipeline renders before merging (C# `PatchTemplateBehaviour`).
         let inputs = crate::templating::Vars::new();
-        crate::template::apply_variables_to_mod(&mut spear_mod, &inputs);
-        crate::template::apply_variables_to_mod(&mut chimera_mod, &inputs);
+        crate::templating::apply_variables_to_mod(&mut spear_mod, &inputs);
+        crate::templating::apply_variables_to_mod(&mut chimera_mod, &inputs);
 
         // Component order (C# priorities): embedded presets (P1) → loose
         // presets (P2) → sicario requests (P3). No conflicts here, but the
@@ -372,7 +372,7 @@ mod tests {
             .unwrap()
             .mods;
         for m in &mut mods {
-            crate::template::apply_variables_to_mod(m, &crate::templating::Vars::new());
+            crate::templating::apply_variables_to_mod(m, &crate::templating::Vars::new());
         }
         let refs: Vec<&WingmanMod> = mods.iter().collect();
         apply_hex_phase(&mut files, &refs).unwrap();
