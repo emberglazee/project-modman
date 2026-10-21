@@ -174,6 +174,8 @@ complete file rather than a 20 second fragment.
 
 In-depth guides live in [`docs/`](docs/README.md):
 
+- [**Architecture**](ARCHITECTURE.md): crate and module map, data flow for each
+  command, the naming rules, and where a new feature belongs.
 - [**Merging conflicting mods**](docs/merging-mods.md): the no-metadata merge,
   conflict semantics, what can and can't merge, reading the report.
 - [**Translation mods**](docs/translation-mods.md): the full `.locres` workflow,
