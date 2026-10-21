@@ -106,7 +106,36 @@ code { background: var(--card2); padding: 1px 6px; border-radius: 5px; font-size
 .fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent2), var(--accent)); transition: width .2s; }
 #status { color: var(--dim); font-size: 13px; margin: 8px 0 0; }
 
-.error { color: var(--err); margin-top: 12px; white-space: pre-wrap; }
+.error {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-left: 3px solid var(--err);
+  border-radius: 6px;
+  background: rgba(255, 107, 107, .07);
+  color: var(--fg);
+}
+.error .errtitle { margin: 0 0 6px; font-weight: 600; color: var(--err); }
+.error .errbody { margin: 0 0 10px; white-space: pre-wrap; }
+.error details { margin-top: 6px; }
+.error summary { cursor: pointer; color: var(--dim); font-size: 13px; }
+.error textarea {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px;
+  font: 12px/1.45 ui-monospace, monospace;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  resize: vertical;
+}
+.error .btn { margin-top: 8px; }
+
+.card.help { border-color: var(--accent2); }
+.card.help ol.steps { margin: 0 0 10px; padding-left: 22px; }
+.card.help ol.steps li { padding: 2px 0; }
+.card.help a { color: var(--accent); text-decoration: none; }
+.card.help a:hover { text-decoration: underline; }
 
 #resultCard h3 { font-size: 15px; margin: 18px 0 8px; }
 #resultCard h3.warn { color: var(--warn); }

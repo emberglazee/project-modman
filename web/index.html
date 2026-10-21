@@ -35,6 +35,20 @@
 </header>
 
 <main>
+  <section class="card help" id="firstTime">
+    <h2>First time here? Start with this</h2>
+    <ol class="steps">
+      <li>Extract the mod archives first. A <code>.zip</code> or <code>.7z</code> renamed to <code>.pak</code> is not a pak.</li>
+      <li>Add the <code>*_P.pak</code> files from those folders below.</li>
+      <li>Point at <code>pakchunk0-WindowsNoEditor.pak</code> in your own install.</li>
+      <li>Press Merge, then drop the downloaded file into your <code>~mods</code> folder and remove the paks you merged.</li>
+    </ol>
+    <p class="hint">
+      Step-by-step walkthrough with pictures: <a href="https://github.com/emberglazee/project-modman/blob/main/docs/merging-in-the-browser.md">merging in the browser</a>.
+      Prefer the command line? <a href="https://github.com/emberglazee/project-modman/blob/main/docs/command-line-walkthrough.md">here is the same thing without jargon</a>.
+    </p>
+  </section>
+
   <section class="card" id="step1">
     <h2><span class="stepnum">1</span> Add the mod paks you want to merge</h2>
     <div class="drop" id="modDrop">
@@ -43,6 +57,7 @@
     </div>
     <ul class="filelist" id="modList"></ul>
     <p class="hint">Merge order: paks are applied in filename order (later ones win conflicts, shown in the report).</p>
+    <p class="hint">Very large sets (over about 1 GB of mod paks) can run out of memory in a browser. If that happens, merge in batches or use the desktop build.</p>
   </section>
 
   <section class="card" id="step2">
@@ -85,7 +100,7 @@
   </p>
 </footer>
 
-<script src="pkg/modman_wasm.js"></script>
-<script src="app.js"></script>
+<script src="pkg/modman_wasm.js?v=0.5.0"></script>
+<script src="app.js?v=0.5.0"></script>
 </body>
 </html>

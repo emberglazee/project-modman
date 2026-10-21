@@ -98,21 +98,190 @@ async function readRange(file, offset, length) {
   return new Uint8Array(buf);
 }
 
+// What the last run looked like, for the diagnostics block.
+let lastRun = null;
+
+function newRunRecord() {
+  return {
+    startedAt: new Date().toISOString(),
+    mods: modFiles.map((f) => ({ name: f.name, size: f.size })),
+    game: gameFile ? { name: gameFile.name, size: gameFile.size } : null,
+    steps: 0,
+    needs: 0,
+    bytesRead: 0,
+    status: '',
+    error: null,
+  };
+}
+
+// Errors we can explain. Anything else falls through to the generic handler.
+function classifyError(e) {
+  const raw = String((e && e.message) || e || '');
+  const run = lastRun || {};
+
+  if (/out of memory|allocation failed|Cannot enlarge memory|memory access out of bounds|Array buffer allocation/i.test(raw)) {
+    return {
+      title: 'Not enough memory for this mod set',
+      body:
+        `The browser ran out of memory while merging ${run.mods ? run.mods.length : 'these'} mods. ` +
+        `That is a limit of running the merger inside a web page, not a problem with your mods.\n\n` +
+        `What to try, in order:\n` +
+        `1. Close other tabs and apps, then reload this page and try again.\n` +
+        `2. Merge fewer mods at a time: merge two, then add the result to the next round.\n` +
+        `3. Use the desktop build instead. It has no such limit and takes the same arguments:\n` +
+        `   modman combine *.pak --install-path "C:\\...\\Project Wingman" --output out\n` +
+        `   See docs/merging-in-the-browser.md in the project for a step-by-step walkthrough.`,
+    };
+  }
+  if (/invalid|magic|not a pak|unsupported|bad header|version/i.test(raw)) {
+    return {
+      title: 'One of the files is not a mod pak',
+      body:
+        `The merger could not read one of the files you added. Common causes:\n` +
+        `- A .zip/.7z/.rar archive was renamed to .pak instead of being extracted first.\n` +
+        `- The game pak was dropped into the mod list, or a mod pak into the game pak slot.\n` +
+        `- A download was cut short (the file is smaller than it should be).\n\n` +
+        `Re-extract the archive and add the .pak files inside it.`,
+    };
+  }
+  if (/step-limit|stalled/i.test(raw)) {
+    return {
+      title: 'The merge stopped making progress',
+      body:
+        `The merger kept asking for the same part of the game pak without moving forward. ` +
+        `That usually means the game pak is not the one these mods were built against ` +
+        `(for example a mod for a different game version).\n\n` +
+        `Check that the game pak is pakchunk0-WindowsNoEditor.pak from your own install.`,
+    };
+  }
+  if (/internal error:/i.test(raw)) {
+    return {
+      title: 'The merge engine hit an internal error',
+      body:
+        `This one is a bug in modman, not something you did. The message below names the internal step. ` +
+        `Please report it with the diagnostics text attached; it is what makes these fixable.`,
+    };
+  }
+  if (/could not read|NotReadableError|NotFoundError/i.test(raw)) {
+    return {
+      title: 'A file could not be read from disk',
+      body:
+        `The browser lost access to one of the files. This happens when a file is moved, ` +
+        `renamed or deleted while the page is open, or when the disk is busy.\n\n` +
+        `Re-add the files and try again.`,
+    };
+  }
+  return {
+    title: 'The merge stopped',
+    body:
+      `The message below is the raw error. If it means nothing to you, paste the diagnostics ` +
+      `text into a report and we can read it from our side.`,
+  };
+}
+
+function buildDiagnostics(rawError) {
+  const run = lastRun || {};
+  const lines = [];
+  lines.push('Project Modman: browser merge diagnostics');
+  lines.push(`when: ${run.startedAt || new Date().toISOString()}`);
+  lines.push(`page: ${location.href}`);
+  lines.push(`browser: ${navigator.userAgent}`);
+  lines.push(`hardwareConcurrency: ${navigator.hardwareConcurrency || 'n/a'}`);
+  lines.push('');
+  lines.push(`mods (${(run.mods || []).length}, ${fmtBytes((run.mods || []).reduce((a, m) => a + m.size, 0))} total):`);
+  for (const m of run.mods || []) lines.push(`  - ${m.name} (${fmtBytes(m.size)})`);
+  lines.push(`game pak: ${run.game ? `${run.game.name} (${fmtBytes(run.game.size)})` : 'none'}`);
+  lines.push('');
+  lines.push(`steps: ${run.steps || 0} (game-pak reads: ${run.needs || 0}, ${fmtBytes(run.bytesRead || 0)} read)`);
+  lines.push(`last status: ${run.status || 'n/a'}`);
+  lines.push(`error: ${rawError}`);
+  return lines.join('\n');
+}
+
+function showError(e) {
+  const { title, body } = classifyError(e);
+  const raw = String((e && e.message) || e || '').trim();
+  const diag = buildDiagnostics(raw);
+
+  errorEl.hidden = false;
+  errorEl.innerHTML = '';
+
+  const h = document.createElement('p');
+  h.className = 'errtitle';
+  h.textContent = title;
+  errorEl.appendChild(h);
+
+  const b = document.createElement('p');
+  b.className = 'errbody';
+  b.textContent = body;
+  errorEl.appendChild(b);
+
+  const det = document.createElement('details');
+  const sum = document.createElement('summary');
+  sum.textContent = 'Diagnostics (copy this into a bug report)';
+  det.appendChild(sum);
+
+  const ta = document.createElement('textarea');
+  ta.readOnly = true;
+  ta.value = diag;
+  ta.rows = 12;
+  det.appendChild(ta);
+
+  const copy = document.createElement('button');
+  copy.className = 'btn secondary';
+  copy.textContent = 'Copy diagnostics';
+  copy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(diag);
+      copy.textContent = 'Copied';
+    } catch {
+      ta.select();
+      copy.textContent = 'Press Ctrl+C';
+    }
+  });
+  det.appendChild(copy);
+
+  errorEl.appendChild(det);
+}
+
+const MAX_STEPS = 100_000;
+
 async function runMerge() {
   setError('');
   resultCard.hidden = true;
   progress.hidden = false;
   mergeBtn.disabled = true;
   resultPak = null;
+  lastRun = newRunRecord();
   let bytesRead = 0;
+  let loadingMod = null;
 
   try {
+    const totalModBytes = modFiles.reduce((a, f) => a + f.size, 0);
+    if (totalModBytes > 3_000_000_000) {
+      throw new Error(
+        `out of memory: this set is ${fmtBytes(totalModBytes)}, which is more than a browser can hold in memory`,
+      );
+    }
+
     const session = new wasm_bindgen.MergeSession();
     const sorted = [...modFiles].sort((a, b) => a.name.localeCompare(b.name));
     for (const f of sorted) {
-      setStatus(`Loading ${f.name}…`, 0.02);
-      session.add_mod(f.name, new Uint8Array(await f.arrayBuffer()));
+      loadingMod = f.name;
+      setStatus(`Loading ${f.name} (${fmtBytes(f.size)})…`, 0.02);
+      let bytes;
+      try {
+        bytes = new Uint8Array(await f.arrayBuffer());
+      } catch (e) {
+        throw new Error(`could not read ${f.name} from disk: ${(e && e.message) || e}`);
+      }
+      try {
+        session.add_mod(f.name, bytes);
+      } catch (e) {
+        throw new Error(`could not load ${f.name} as a pak: ${(e && e.message) || e}`);
+      }
     }
+    loadingMod = null;
     session.set_game_pak(gameFile.size);
 
     // The pak index + footer live at the end of the file; grab a generous
@@ -123,29 +292,45 @@ async function runMerge() {
     bytesRead += gameFile.size - tailStart;
 
     const expected = gameFile.size;
-    for (let step = 0; step < 200; step++) {
+    let lastRequest = '';
+    let repeats = 0;
+
+    for (let step = 0; ; step++) {
+      if (step >= MAX_STEPS) {
+        throw new Error(`step-limit: gave up after ${MAX_STEPS} reads from the game pak`);
+      }
       const r = session.step();
+      lastRun.steps = step + 1;
       if (r.status === 'need') {
+        // A merge that keeps asking for the same range is stuck, not slow.
+        const key = `${r.offset}:${r.length}`;
+        repeats = key === lastRequest ? repeats + 1 : 0;
+        lastRequest = key;
+        if (repeats > 50) throw new Error(`stalled: asked for ${key} ${repeats} times`);
+
+        lastRun.needs++;
+        lastRun.status = `reading ${fmtBytes(bytesRead)} of the game pak`;
         setStatus(
           `Reading game data… ${fmtBytes(bytesRead)} (${((bytesRead / expected) * 100).toFixed(2)}% of the pak)`,
           0.1 + 0.8 * Math.min(1, bytesRead / (32 * 1024 * 1024)),
         );
         session.provide(r.offset, await readRange(gameFile, r.offset, r.length));
         bytesRead += r.length;
+        lastRun.bytesRead = bytesRead;
         continue;
       }
       // done
       resultPak = r.pak;
       const report = JSON.parse(r.report);
+      lastRun.status = `merged ${report.merged} datatable(s), ${report.files} file(s)`;
       setStatus(`Merged ${report.merged} datatable(s), ${report.files} file(s) total.`, 1);
       showReport(report);
       break;
     }
   } catch (e) {
-    setError(`Merge failed: ${e}
-
-This is a bug. The browser console (F12) logs which internal step failed, and that line is what helps us fix it. Please report it at github.com/emberglazee/project-modman/issues
-If the console mentions memory: close other tabs, reload, and retry. Very large mod collections may need the modman CLI instead.`);
+    lastRun.error = String((e && e.message) || e);
+    if (loadingMod) lastRun.error = `while loading ${loadingMod}: ${lastRun.error}`;
+    showError(e);
   } finally {
     mergeBtn.disabled = false;
     refreshUi();

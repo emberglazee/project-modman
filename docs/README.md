@@ -10,6 +10,10 @@
   notes for tool authors.
 - [**FAQ**](faq.md): install paths, first-run warnings (SmartScreen/Gatekeeper),
   merge conflicts, translation questions, browser-page privacy.
+- [**Merging in the browser**](merging-in-the-browser.md): the no-install route,
+  step by step, and what to do when a large set runs out of memory.
+- [**Command line walkthrough**](command-line-walkthrough.md): the same job
+  without jargon, for someone who has never opened a terminal.
 - [**Game audio**](audio.md): listing and extracting the game's sounds as `.ogg`,
   the streamed-track trap, and how to check a result.
 

@@ -6,6 +6,29 @@
 and writes each SoundWave out as the `.ogg` stream it already contains.
 
 ### Added
+- Two guides written for people who are not tool authors:
+  [`docs/merging-in-the-browser.md`](docs/merging-in-the-browser.md) and
+  [`docs/command-line-walkthrough.md`](docs/command-line-walkthrough.md). The
+  second one explains how to open a terminal, what each part of the command
+  means, and what every common error means.
+- The browser page now opens with a four-step "first time here" block, and every
+  failure gets a titled explanation instead of a generic message: out of memory,
+  not a pak, stuck reading the game pak, unreadable file, and internal error are
+  each recognised and answered with the next step.
+- Failed merges now produce a **copyable diagnostics block**: the page, browser,
+  mod list with sizes, game pak, number of reads and where it stopped. Reports
+  built from that are actionable without a follow-up round trip.
+- The page's scripts carry a version query (`?v=0.5.0`), so a returning visitor
+  no longer runs a cached copy of the previous release's JavaScript.
+
+### Fixed
+- The browser page gave up after 200 reads from the game pak and could stop
+  without saying so. It now runs to completion (100,000 reads as a safety net)
+  and reports a stalled read as its own error instead of looping or hanging.
+- Loading a file that is not a pak produced a raw repak version probe
+  (`trying version V11 failed: got 111, which is not a boolean`) with no
+  indication of what to do. That now reads "One of the files is not a mod pak"
+  with the three usual causes.
 - `modman audio list` prints the SoundWave assets in a pak, or in the game's own
   pak when no path is given, with `--filter` to narrow by path substring.
 - `modman audio extract` writes each SoundWave to a mirrored tree of `.ogg`
