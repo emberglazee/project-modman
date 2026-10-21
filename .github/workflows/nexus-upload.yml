@@ -37,12 +37,52 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { label: "Linux amd64",         asset: modman-linux-amd64,   bin: modman,     file_id: 8187864 }
-          - { label: "Linux arm64",         asset: modman-linux-arm64,   bin: modman,     file_id: 8187867 }
-          - { label: "MacOS amd64 (Intel)", asset: modman-macos-amd64,   bin: modman,     file_id: 8187876 }
-          - { label: "MacOS arm64 (Apple)", asset: modman-macos-arm64,   bin: modman,     file_id: 8187882 }
-          - { label: "Windows arm64",       asset: modman-win-arm64.exe, bin: modman.exe, file_id: 8187885 }
-          - { label: "Windows amd64 (x64)", asset: modman-win-amd64.exe, bin: modman.exe, file_id: 8187891 }
+          - label: "Linux amd64"
+            asset: modman-linux-amd64
+            bin: modman
+            file_id: 8187864
+            description: >-
+              modman for x86-64 Linux, with the MIT license. Extract the archive,
+              run chmod +x modman, then ./modman --help.
+          - label: "Linux arm64"
+            asset: modman-linux-arm64
+            bin: modman
+            file_id: 8187867
+            description: >-
+              modman for 64-bit ARM Linux, with the MIT license. Extract the
+              archive, run chmod +x modman, then ./modman --help.
+          - label: "MacOS amd64 (Intel)"
+            asset: modman-macos-amd64
+            bin: modman
+            file_id: 8187876
+            description: >-
+              modman for Intel Macs, with the MIT license. The binary is
+              unsigned, so the first run needs a right-click then Open, or
+              xattr -d com.apple.quarantine modman.
+          - label: "MacOS arm64 (Apple)"
+            asset: modman-macos-arm64
+            bin: modman
+            file_id: 8187882
+            description: >-
+              modman for Apple Silicon, with the MIT license. The binary is
+              unsigned, so the first run needs a right-click then Open, or
+              xattr -d com.apple.quarantine modman.
+          - label: "Windows arm64"
+            asset: modman-win-arm64.exe
+            bin: modman.exe
+            file_id: 8187885
+            description: >-
+              modman for 64-bit ARM Windows, with the MIT license. Double-clicking
+              it shows usage and waits for a key. SmartScreen may warn because the
+              binary is unsigned: More info, then Run anyway.
+          - label: "Windows amd64 (x64)"
+            asset: modman-win-amd64.exe
+            bin: modman.exe
+            file_id: 8187891
+            description: >-
+              modman for x86-64 Windows, with the MIT license. Double-clicking it
+              shows usage and waits for a key. SmartScreen may warn because the
+              binary is unsigned: More info, then Run anyway.
     steps:
       - uses: actions/checkout@v6
         with:
@@ -77,6 +117,7 @@ jobs:
           filename: ${{ steps.pack.outputs.file }}
           version: ${{ inputs.version }}
           display_name: ${{ matrix.label }}
+          description: ${{ matrix.description }}
           category: main
           update_mod_version: true
           archive_existing_version: false
