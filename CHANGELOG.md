@@ -35,6 +35,15 @@ real-world mod set (5 aircraft mods + a stale output) whose report flooded with
   properties, so vanilla-identical fields survive and row assembly no longer
   panics on a row it cannot find.
 
+### Added
+- `VIRUSTOTAL.md` ships with every release: the release job scans all six
+  binaries and attaches the result, so a download can be checked before it is
+  run. Builds scan their platform binaries too and report in the run summary.
+  The scan looks a file up by SHA-256 first and only uploads an unknown hash
+  (the public API allows 4 requests a minute and 500 a day), and a detection is
+  reported rather than fatal — one heuristic flagging an unsigned binary must
+  not block a release.
+
 ## [v0.4.4] — 2026-10-11
 
 **Datatable-only merges.** A new switch for people whose conflicts are in

@@ -228,6 +228,19 @@ jobs:
           cp bin-stage/modman-single-file/modman-merge.html release-assets/modman-merge.html
           chmod +x release-assets/modman-linux-* release-assets/modman-macos-*
 
+      # Scans the exact bytes about to be published and writes the report into
+      # the release assets, so the published binaries carry their own scan
+      # result. Reported, never fatal: an unsigned-binary false positive must
+      # not block a release.
+      - name: VirusTotal scan
+        env:
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
+        run: |
+          python3 .github/scripts/vt_scan.py --report release-assets/VIRUSTOTAL.md \
+            release-assets/modman-linux-amd64 release-assets/modman-linux-arm64 \
+            release-assets/modman-macos-amd64 release-assets/modman-macos-arm64 \
+            release-assets/modman-win-amd64.exe release-assets/modman-win-arm64.exe
+
       # Checksums for every published artifact so a locally downloaded build
       # can be verified with `sha256sum -c SHA256SUMS` before running it.
       - name: Generate SHA256SUMS

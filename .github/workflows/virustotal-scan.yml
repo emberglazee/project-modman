@@ -1,0 +1,89 @@
+name: VirusTotal
+
+# Scans binaries with the VirusTotal API and publishes a report.
+#
+# Hash-first by design: the public API allows 4 requests/minute and 500/day, so a
+# file VT already knows costs one lookup, and only an unknown hash is uploaded.
+# A detection is reported, never fatal unless `fail-on-detection` is set — an
+# unsigned-binary false positive must not block a release.
+#
+# Requires the `VT_API_KEY` repository secret. Without it the scan reports
+# "skipped" and the caller continues.
+
+on:
+  workflow_call:
+    inputs:
+      artifact-pattern:
+        description: >-
+          Artifact name pattern to download and scan. Each artifact must contain
+          a `modman` or `modman.exe`; files are renamed after their artifact so
+          the six platform builds do not collide.
+        type: string
+        default: ""
+      paths:
+        description: Files or globs to scan when no artifacts are downloaded.
+        type: string
+        default: ""
+      fail-on-detection:
+        description: Fail when any engine flags a file. Off by default.
+        type: boolean
+        default: false
+    secrets:
+      VT_API_KEY:
+        required: false
+
+jobs:
+  scan:
+    name: Scan binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download build artifacts
+        if: ${{ inputs.artifact-pattern != '' }}
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ${{ inputs.artifact-pattern }}
+          path: download
+
+      - name: Collect files
+        id: collect
+        run: |
+          set -euo pipefail
+          mkdir -p scan
+          if [ -d download ]; then
+            while IFS= read -r f; do
+              dir=$(basename "$(dirname "$f")")
+              case "$f" in
+                *.exe) cp "$f" "scan/$dir.exe" ;;
+                *)     cp "$f" "scan/$dir" ;;
+              esac
+            done < <(find download -type f \( -name modman -o -name 'modman.exe' \))
+          fi
+          if [ -n "${{ inputs.paths }}" ]; then
+            shopt -s nullglob
+            for p in ${{ inputs.paths }}; do
+              if [ -f "$p" ]; then cp -n "$p" scan/; fi
+            done
+          fi
+          chmod +x scan/* 2>/dev/null || true
+          echo "count=$(find scan -type f | wc -l)" >> "$GITHUB_OUTPUT"
+          ls -l scan
+
+      - name: VirusTotal scan
+        if: steps.collect.outputs.count != '0'
+        env:
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
+        run: |
+          flag=""
+          if [ "${{ inputs.fail-on-detection }}" = "true" ]; then flag="--fail-on-detection"; fi
+          python3 .github/scripts/vt_scan.py $flag $(find scan -type f | sort)
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: virustotal-report
+          path: virustotal-report.md
+          if-no-files-found: warn

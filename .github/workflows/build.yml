@@ -21,3 +21,15 @@ concurrency:
 jobs:
   build:
     uses: ./.github/workflows/rust-build.yml
+
+  # Scans each platform binary with VirusTotal and publishes a report in the run
+  # summary. Skipped on pull requests: those binaries are never published, and
+  # the public API quota (4/min, 500/day) is finite.
+  virustotal:
+    name: VirusTotal
+    needs: build
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/virustotal-scan.yml
+    with:
+      artifact-pattern: "modman-*"
+    secrets: inherit
