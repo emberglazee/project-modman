@@ -115,15 +115,6 @@ pub fn resolve<'a>(dt: &'a DataTable, fragments: &[Fragment]) -> Vec<Node<'a>> {
     set
 }
 
-/// Parse a template and resolve it in one step.
-pub fn resolve_template<'a>(
-    dt: &'a DataTable,
-    template: &str,
-) -> Result<Vec<Node<'a>>, crate::fragment::ParseError> {
-    let ctx = crate::fragment::parse_template(template)?;
-    Ok(resolve(dt, &ctx.fragments))
-}
-
 fn apply<'a>(dt: &'a DataTable, input: &[Node<'a>], fragment: &Fragment) -> Vec<Node<'a>> {
     match fragment {
         Fragment::Any => input.to_vec(),

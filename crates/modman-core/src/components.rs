@@ -373,13 +373,6 @@ fn collect_skin_paks(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// `MergeExtensions.GetMods`: ascending priority, concatenated.
-pub fn ordered_mods(components: &[MergeComponent]) -> Vec<&WingmanMod> {
-    let mut sorted: Vec<&MergeComponent> = components.iter().collect();
-    sorted.sort_by_key(|c| c.priority);
-    sorted.iter().flat_map(|c| c.mods.iter()).collect()
-}
-
 /// Drain mods out of the components in ascending priority order (leaves
 /// params/resources intact for the report).
 pub fn take_ordered_mods(components: &mut [MergeComponent]) -> Vec<WingmanMod> {
@@ -477,15 +470,15 @@ mod tests {
     }
 
     #[test]
-    fn ordered_mods_by_priority() {
+    fn take_ordered_mods_sorts_by_priority() {
         let mut a = comp("embeddedPresets", 1, &[]);
         let mut b = comp("loosePresets", 2, &[]);
         let mut c = comp("sicarioRequests", 3, &[]);
         a.mods = vec![crate::manifest::parse_mod_json(r#"{"_id":"a"}"#).unwrap()];
         b.mods = vec![crate::manifest::parse_mod_json(r#"{"_id":"b"}"#).unwrap()];
         c.mods = vec![crate::manifest::parse_mod_json(r#"{"_id":"c"}"#).unwrap()];
-        let components = vec![c, b, a];
-        let ordered = ordered_mods(&components);
+        let mut components = vec![c, b, a];
+        let ordered = take_ordered_mods(&mut components);
         let ids: Vec<&str> = ordered.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, vec!["a", "b", "c"]);
     }

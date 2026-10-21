@@ -568,17 +568,46 @@ fn main() {
                         return;
                     }
 
-                    // Merge all mods into a single build plan
-                    let first_mod = &all_mods[0];
-                    let plan = match modman_core::engine::plan_build(first_mod) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            eprintln!("Build plan error: {}", e);
-                            std::process::exit(1);
+                    // Collect what every mod in the merge would touch. The
+                    // engine prototype this used to borrow from is gone, and it
+                    // only ever looked at the first mod, so this is also a
+                    // correctness fix: the preview now covers all of them.
+                    let mut targets: std::collections::BTreeMap<
+                        String,
+                        Vec<(
+                            Vec<modman_core::fragment::Fragment>,
+                            modman_core::patch::PatchOp,
+                        )>,
+                    > = std::collections::BTreeMap::new();
+                    for m in &all_mods {
+                        for (target, sets) in &m.asset_patches {
+                            for set in sets {
+                                for p in &set.patches {
+                                    let parsed = modman_core::fragment::parse_template(&p.template)
+                                        .map_err(|e| format!("{}: {e}", p.description))
+                                        .and_then(|ctx| {
+                                            modman_core::patch::parse_patch_value(
+                                                &p.patch_type,
+                                                &p.value,
+                                            )
+                                            .map(|op| (ctx.fragments, op))
+                                            .map_err(|e| format!("{}: {e}", p.description))
+                                        });
+                                    match parsed {
+                                        Ok(entry) => {
+                                            targets.entry(target.clone()).or_default().push(entry)
+                                        }
+                                        Err(e) => {
+                                            eprintln!("Build plan error: {e}");
+                                            std::process::exit(1);
+                                        }
+                                    }
+                                }
+                            }
                         }
-                    };
+                    }
 
-                    if plan.file_patches.is_empty() {
+                    if targets.is_empty() {
                         println!("No asset patches to apply.");
                         return;
                     }
@@ -612,7 +641,7 @@ fn main() {
                     std::fs::create_dir_all(&extract_dir).unwrap();
 
                     let mut ok_targets = 0usize;
-                    for (target_file, patches) in &plan.file_patches {
+                    for (target_file, patches) in &targets {
                         println!("\nProcessing: {} ({} patches)", target_file, patches.len());
 
                         let needle = target_file
@@ -687,8 +716,8 @@ fn main() {
                                         "MISMATCH"
                                     }
                                 );
-                                for cp in patches.iter() {
-                                    let nodes = modman_core::resolver::resolve(&dt, &cp.fragments);
+                                for (fragments, op) in patches.iter() {
+                                    let nodes = modman_core::resolver::resolve(&dt, fragments);
                                     let spans: Vec<String> = nodes
                                         .iter()
                                         .take(4)
@@ -700,7 +729,7 @@ fn main() {
                                         .collect();
                                     println!(
                                         "    [{}] -> {} target(s){}",
-                                        cp.operation.label(),
+                                        op.label(),
                                         nodes.len(),
                                         if spans.is_empty() {
                                             String::new()
@@ -721,7 +750,7 @@ fn main() {
                         "\nEngine preview complete: {}/{} target asset(s) parsed. Patch application + \
                          merge are the next milestone — no mod output was written.",
                         ok_targets,
-                        plan.file_patches.len()
+                        targets.len()
                     );
                 }
                 None => {

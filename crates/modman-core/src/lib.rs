@@ -11,7 +11,6 @@ pub mod audio;
 pub mod combine;
 pub mod components;
 pub mod discovery;
-pub mod engine;
 pub mod fragment;
 pub mod hexpatch;
 pub mod locres;

@@ -72,20 +72,6 @@ pub fn set_bool(uexp: &mut [u8], prop: &Prop, v: bool) -> Result<(), Error> {
     }
 }
 
-/// Set a raw `ByteProperty` byte value (1-byte byte-kind only).
-pub fn set_byte(uexp: &mut [u8], prop: &Prop, v: u8) -> Result<(), Error> {
-    match &prop.value {
-        PropValue::Byte {
-            value: ByteValue::Byte(_),
-            ..
-        } => splice(uexp, edit_span(prop).unwrap(), &[v]),
-        _ => Err(Error::Edit(format!(
-            "not a byte-valued ByteProperty: {}",
-            prop.name
-        ))),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -9,7 +9,6 @@ pub mod export;
 pub mod hash;
 pub mod header;
 pub mod names;
-pub mod properties;
 pub mod rewrite;
 pub mod soundwave;
 pub mod walk;
