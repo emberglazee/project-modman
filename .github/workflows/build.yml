@@ -11,6 +11,8 @@ on:
       - '.cargo/**'
       - '.github/workflows/build.yml'
       - '.github/workflows/rust-build.yml'
+      - '.github/workflows/virustotal-scan.yml'
+      - '.github/scripts/**'
   pull_request:
     branches: [ main ]
 
