@@ -92,21 +92,27 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             asset: modman-linux-amd64
+            gui_asset: modman-gui-linux-amd64
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             asset: modman-linux-arm64
+            gui_asset: modman-gui-linux-arm64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             asset: modman-win-amd64.exe
+            gui_asset: modman-gui-win-amd64.exe
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
             asset: modman-win-arm64.exe
+            gui_asset: modman-gui-win-arm64.exe
           - os: macos-latest
             target: aarch64-apple-darwin
             asset: modman-macos-arm64
+            gui_asset: modman-gui-macos-arm64.zip
           - os: macos-latest
             target: x86_64-apple-darwin
             asset: modman-macos-amd64
+            gui_asset: modman-gui-macos-amd64.zip
     steps:
       - uses: actions/checkout@v6
         with:
@@ -126,7 +132,7 @@ jobs:
           # --locked: the release bump edits Cargo.lock (version lines only);
           # if that edit ever left the lock inconsistent, this fails the
           # release instead of cargo silently repairing it at build time.
-          cargo build --release --locked --target ${{ matrix.target }} -p modman
+          cargo build --release --locked --target ${{ matrix.target }} -p modman -p modman-gui
 
       # ── Windows smoke test: the binary must run, and (with the static-CRT ──
       # ── config in .cargo/config.toml) must not depend on the Visual C++  ──
@@ -160,6 +166,70 @@ jobs:
           }
           Write-Host "modman smoke test OK: $version"
 
+      - name: Smoke Test GUI (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "target/${{ matrix.target }}/release/modman-gui.exe"
+          $version = & $exe --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "modman-gui --version failed: $version"
+          }
+          Write-Host "modman-gui smoke test OK: $version"
+
+      # ── GUI packaging ────────────────────────────────────────────────────
+      # Linux and Windows ship the bare binary. macOS ships a .app bundle,
+      # ad-hoc signed: a bare Mach-O has no Dock entry, and Gatekeeper wants a
+      # bundle to judge. Signing with '-' needs no Apple account; users still
+      # get the "unverified developer" prompt on first open.
+      - name: Package GUI
+        shell: bash
+        run: |
+          set -euo pipefail
+          T="${{ matrix.target }}"
+          OUT="dist/${{ matrix.gui_asset }}"
+          VERSION="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          mkdir -p dist
+          BIN="target/$T/release/modman-gui"
+          [ -f "$BIN" ] || BIN="${BIN}.exe"
+          case "$T" in
+            *windows*)
+              cp "$BIN" "$OUT"
+              ;;
+            *darwin*)
+              APP="dist/Modman.app"
+              rm -rf "$APP"
+              mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+              cp "$BIN" "$APP/Contents/MacOS/modman-gui"
+              chmod +x "$APP/Contents/MacOS/modman-gui"
+              cat > "$APP/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>Project Modman</string>
+            <key>CFBundleDisplayName</key><string>Project Modman</string>
+            <key>CFBundleExecutable</key><string>modman-gui</string>
+            <key>CFBundleIdentifier</key><string>io.github.emberglazee.modman</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+              codesign --force --sign - --timestamp=none "$APP"
+              codesign --verify --verbose "$APP"
+              ditto -c -k --keepParent "$APP" "$OUT"
+              ;;
+            *)
+              cp "$BIN" "$OUT"
+              chmod +x "$OUT"
+              ;;
+          esac
+          ls -l "$OUT"
+
       - name: Upload Binary
         uses: actions/upload-artifact@v7
         with:
@@ -167,4 +237,11 @@ jobs:
           path: |
             target/${{ matrix.target }}/release/modman
             target/${{ matrix.target }}/release/modman.exe
+          if-no-files-found: error
+
+      - name: Upload GUI
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.gui_asset }}
+          path: dist/${{ matrix.gui_asset }}
           if-no-files-found: error

@@ -13,7 +13,9 @@ browser engine and no terminal.
   conflict report and installs into `~mods` with a timestamped backup. Archive
   support is pure Rust (`rars` Apache-2.0, `sevenz-rust` MIT, `zip` MIT), so
   nothing has to be installed on the machine, on Windows or anywhere else. egui,
-  no browser engine, 10.7 MB binary.
+  no browser engine, 10.7 MB binary. Release builds ship for all six targets
+  (Linux/Windows as bare binaries, macOS as an ad-hoc-signed `Modman.app` in a
+  zip, since a bare Mach-O has no Dock entry and Gatekeeper wants a bundle).
 - `modman audio list` prints the SoundWave assets in a pak, or in the game's own
   pak when no path is given, with `--filter` to narrow by path substring.
 - `modman audio extract` writes each SoundWave to a mirrored tree of `.ogg`

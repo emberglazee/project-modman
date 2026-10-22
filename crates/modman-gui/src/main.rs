@@ -18,6 +18,7 @@ struct Args {
     paths: Vec<PathBuf>,
     merge_now: bool,
     exit_when_done: bool,
+    version: bool,
     out: Option<PathBuf>,
 }
 
@@ -26,6 +27,7 @@ fn parse_args() -> Args {
         paths: Vec::new(),
         merge_now: false,
         exit_when_done: false,
+        version: false,
         out: None,
     };
     let mut it = std::env::args().skip(1);
@@ -33,6 +35,7 @@ fn parse_args() -> Args {
         match a.as_str() {
             "--merge-now" => args.merge_now = true,
             "--exit-when-done" => args.exit_when_done = true,
+            "--version" | "-V" => args.version = true,
             "--out" => args.out = it.next().map(PathBuf::from),
             other if !other.starts_with('-') => args.paths.push(PathBuf::from(other)),
             _ => {}
@@ -43,6 +46,11 @@ fn parse_args() -> Args {
 
 fn main() -> eframe::Result<()> {
     let args = parse_args();
+    // Answers the packaging smoke test without needing a display.
+    if args.version {
+        println!("modman-gui {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([940.0, 680.0])

@@ -13,6 +13,14 @@ name: Nexus upload
 #     refused with 422, so every platform ships a .zip. The Unix binaries are
 #     chmod +x'd before zipping, and the docs still tell Linux users to run
 #     `chmod +x modman` because some extractors drop the mode.
+#
+# Windows is deliberately NOT published here. Nexus quarantines every unsigned
+# Windows executable we upload, so a Windows entry would sit un-downloadable
+# next to a stale version. The mod description already links to the GitHub
+# release for Windows builds, which is both usable and verifiable against the
+# release CI, and that link is what Windows users actually use. The previous
+# Windows file entries (8187885, 8187891) are left in place, frozen, rather than
+# deleted, so nothing 404s for anyone who bookmarked them.
 
 on:
   workflow_call:
@@ -67,22 +75,6 @@ jobs:
               modman for Apple Silicon, with the MIT license. The binary is
               unsigned, so the first run needs a right-click then Open, or
               xattr -d com.apple.quarantine modman.
-          - label: "Windows arm64"
-            asset: modman-win-arm64.exe
-            bin: modman.exe
-            file_id: 8187885
-            description: >-
-              modman for 64-bit ARM Windows, with the MIT license. Double-clicking
-              it shows usage and waits for a key. SmartScreen may warn because the
-              binary is unsigned: More info, then Run anyway.
-          - label: "Windows amd64 (x64)"
-            asset: modman-win-amd64.exe
-            bin: modman.exe
-            file_id: 8187891
-            description: >-
-              modman for x86-64 Windows, with the MIT license. Double-clicking it
-              shows usage and waits for a key. SmartScreen may warn because the
-              binary is unsigned: More info, then Run anyway.
     steps:
       - uses: actions/checkout@v6
         with:
