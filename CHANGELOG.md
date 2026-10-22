@@ -68,6 +68,14 @@ browser engine and no terminal.
   and the guide all say so, and point at the desktop build, which does the same
   29-mod set in about 10 seconds from the command line, or under a minute in the
   GUI including archive extraction.
+- Dependencies are current. `cargo update` moved 37 packages, and the GUI moved
+  to eframe/egui 0.37, rfd 0.17 and zip 9, which required migrating to the new
+  `App::ui` trait and the `Panel::top`/`Panel::bottom` API, plus `x11`/`wayland`
+  features that are no longer implied once `default-features` is off. Measured on
+  the 29-mod set, upgraded versus before: **+2.7% CPU** (7.31 → 7.51 s of user+sys
+  time), memory unchanged at 98 MB, output unchanged, GUI binary 10.7 → 9.6 MB.
+  Wall time on a loaded machine swings 10–20 s and is not a usable metric; the
+  CPU figure is from an interleaved A/B run.
 - Release binaries are built with thin LTO, one codegen unit and stripped
   symbols, from a workspace-level profile. The GUI went from 17.2 MB to 10.7 MB
   and the CLI from 3.9 MB to 3.1 MB, and the 29-mod merge got faster (15 s to

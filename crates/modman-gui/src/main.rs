@@ -301,7 +301,8 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = root.ctx().clone();
         if self.auto_merge && !self.running && self.result.is_none() {
             self.auto_merge = false;
             if !self.inputs.is_empty() && self.paks_dir.is_some() {
@@ -315,14 +316,14 @@ impl eframe::App for App {
             i.raw
                 .dropped_files
                 .iter()
-                .filter_map(|f| f.path.clone())
+                .map(|f| f.path().to_path_buf())
                 .collect()
         });
         if !dropped.is_empty() {
             self.add_paths(dropped);
         }
 
-        egui::TopBottomPanel::top("top").show(ctx, |ui| {
+        egui::Panel::top("top").show(root, |ui| {
             ui.add_space(6.0);
             ui.heading("Project Modman");
             ui.label("Merge Project Wingman mods that fight over the same files.");
@@ -353,7 +354,7 @@ impl eframe::App for App {
             ui.add_space(6.0);
         });
 
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+        egui::Panel::bottom("status").show(root, |ui| {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 if self.running {
@@ -370,7 +371,7 @@ impl eframe::App for App {
             ui.add_space(4.0);
         });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(root, |ui| {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 if ui.button("Add archives or paks…").clicked() {

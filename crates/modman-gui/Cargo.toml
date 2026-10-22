@@ -12,11 +12,13 @@ modman-core = { path = "../modman-core" }
 modman-pak = { path = "../modman-pak" }
 
 # egui rather than a webview: no browser engine, no system toolkit, one binary.
-eframe = { version = "0.29", default-features = false, features = ["glow", "default_fonts"] }
-rfd = "0.15"
+# x11 + wayland are not implied once default-features is off: without them
+# winit has no platform and fails with "platform ... not supported".
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+rfd = "0.17"
 
 # Archive extraction, all pure Rust so nothing has to be installed or bundled.
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 sevenz-rust = "0.6"
 # Reading only: we never write or decrypt RAR archives, and the writer plus
 # crypto paths cost several MB of binary.
