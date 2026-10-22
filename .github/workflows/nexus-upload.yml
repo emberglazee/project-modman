@@ -51,8 +51,6 @@ on:
 jobs:
   upload:
     name: Nexus (${{ matrix.label }})
-    # GUI legs are skipped when that version's GUI zips were uploaded by hand.
-    if: ${{ !matrix.gui || inputs.gui }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -127,6 +125,7 @@ jobs:
 
       - name: Package
         id: pack
+        if: ${{ !matrix.gui || inputs.gui }}
         run: |
           set -euo pipefail
           mkdir -p pkg
@@ -141,6 +140,7 @@ jobs:
           ls -l "${{ matrix.asset }}.zip"
 
       - name: Upload to Nexus
+        if: ${{ !matrix.gui || inputs.gui }}
         uses: Nexus-Mods/upload-action@v1.0.0-beta.11
         with:
           api_key: ${{ secrets.NEXUSMODS_API_KEY }}
