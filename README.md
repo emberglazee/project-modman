@@ -10,6 +10,7 @@
   - [Beyond parity](#beyond-parity)
 - [Merging mods without metadata (`combine`)](#merging-mods-without-metadata-combine)
   - [Web UI — no install needed](#web-ui--no-install-needed)
+  - [Desktop app — no terminal needed](#desktop-app--no-terminal-needed)
   - [Downloading & first run](#downloading--first-run)
 - [Translation mods (`.locres`)](#translation-mods-locres)
 - [Game audio (`.ogg`)](#game-audio-ogg)
@@ -105,6 +106,28 @@ WebAssembly, running entirely in your browser:
   after loading.
 - Shows the same merge report (order + conflicts) with a friendly UI.
 
+### Desktop app — no terminal needed
+
+`modman-gui` is the same engine in a native window: egui, no browser engine, one
+binary at about 10.9 MB. Download it from the release page and double-click; it
+finds the game on its own, and asks if it cannot.
+
+- **Merge mods**: drag `.rar`, `.7z`, `.zip` or `.pak` files onto the window.
+  Archives are extracted in-process (`rars`, `sevenz-rust`, `zip`, all pure Rust,
+  so nothing has to be installed) and merged; one button then installs the result
+  into `~mods`, keeping a timestamped backup of whatever it replaced.
+- **Build presets**: build a Sicario preset set into one `SicarioMerge_P.pak`.
+- **Game audio**: list the sound assets in a pak and extract them as `.ogg`.
+- **Translations**: pull a `.locres` out of the game pak, export it as CSV, and
+  patch a translated CSV back in.
+- **Pak files**: inspect, unpack and repack.
+- **Scan & inspect**: list the installed Sicario components, or inspect a
+  `.dtm`/`.dtp` patch file.
+
+Every tab calls the same `modman-core` function the command line calls, so the
+window cannot produce output the CLI would not. Linux and Windows builds; on
+macOS run the Windows build under Whisky or CrossOver.
+
 ### Downloading & first run
 
 - **Windows**: double-clicking `modman.exe` shows a welcome screen (it pauses so you
@@ -133,11 +156,11 @@ gh attestation verify ./modman-linux-amd64 \
 The command hashes the file, fetches the attestation GitHub stores for that digest,
 and checks the signature against the workflow identity. A pass means the file is the
 exact output of a build of this repository at a recorded commit. A fail means the file
-is not that, whatever else it is. The same works for the GUI zips and for the Windows
-binaries:
+is not that, whatever else it is. The same works for the GUI binaries and for the
+Windows builds:
 
 ```bash
-gh attestation verify ./modman-gui-linux-amd64-0.5.0.zip --repo emberglazee/project-modman
+gh attestation verify ./modman-gui-linux-amd64 --repo emberglazee/project-modman
 ```
 
 `SHA256SUMS` on each release still serves the older workflow: it proves the download

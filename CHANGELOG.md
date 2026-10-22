@@ -16,7 +16,7 @@ browser engine and no terminal.
   calls, so the window cannot grow behaviour the command line does not have. Archive
   support is pure Rust (`rars` Apache-2.0, `sevenz-rust` MIT, `zip` MIT), so
   nothing has to be installed on the machine, on Windows or anywhere else. egui,
-  no browser engine, 10.7 MB binary. Release builds ship the GUI for Linux and
+  no browser engine, 10.9 MB on Linux and 9.3 MB on Windows. Release builds ship the GUI for Linux and
   Windows as bare binaries. macOS gets the CLI only: Mac users run the Windows
   build under Whisky or CrossOver — the same win32 path verified under Wine —
   rather than an unsigned `.app` that Gatekeeper blocks and that nobody has been
