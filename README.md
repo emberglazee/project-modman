@@ -117,6 +117,32 @@ WebAssembly, running entirely in your browser:
 - Or skip all of that: the **web page**, or the **offline `modman-merge.html`**, one file
   you double-click with no install, no server and no network.
 
+### Verify what you downloaded
+
+These binaries are unsigned, so there is no publisher name to check. What there is
+instead is a signed build provenance statement: every release binary is built by this
+repository's CI, and that claim is cryptographically attested by GitHub. Anybody can
+check it, and it takes one command with the GitHub CLI (2.49 or newer):
+
+```bash
+gh attestation verify ./modman-linux-amd64 \
+  --repo emberglazee/project-modman \
+  --signer-workflow emberglazee/project-modman/.github/workflows/rust-build.yml
+```
+
+The command hashes the file, fetches the attestation GitHub stores for that digest,
+and checks the signature against the workflow identity. A pass means the file is the
+exact output of a build of this repository at a recorded commit. A fail means the file
+is not that, whatever else it is. The same works for the GUI zips and for the Windows
+binaries:
+
+```bash
+gh attestation verify ./modman-gui-linux-amd64-0.5.0.zip --repo emberglazee/project-modman
+```
+
+`SHA256SUMS` on each release still serves the older workflow: it proves the download
+is intact, not who built it. The attestation proves both.
+
 ## Translation mods (`.locres`)
 
 The game's text lives in Unreal localization binaries at

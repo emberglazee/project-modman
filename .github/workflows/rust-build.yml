@@ -11,6 +11,14 @@ on:
         required: false
         type: string
 
+# Artifact attestations: every binary this workflow produces gets a signed
+# SLSA provenance statement, so a download can be traced back to this workflow,
+# this commit and this repository with one command (`gh attestation verify`).
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
 jobs:
   # ── Static gate: formatting + lint on both Linux and Windows — the ──
   # ── Windows leg exists so `cfg(windows)` code is actually linted.    ──
@@ -237,6 +245,24 @@ jobs:
               ;;
           esac
           ls -l "$OUT"
+
+      # Attest exactly what gets uploaded, not the pre-packaged build output:
+      # the digest a user verifies must be the digest they downloaded.
+      #
+      # Not on pull requests: a fork PR never receives an OIDC token, so the
+      # attest step would fail the build for every outside contributor. PR
+      # binaries are not published, so they have nothing to prove.
+      - name: Attest CLI binary
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: actions/attest@v4
+        with:
+          subject-path: target/${{ matrix.target }}/release/modman${{ contains(matrix.target, 'windows') && '.exe' || '' }}
+
+      - name: Attest GUI binary
+        if: ${{ github.event_name != 'pull_request' && !contains(matrix.target, 'darwin') }}
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/${{ matrix.gui_asset }}
 
       - name: Upload Binary
         uses: actions/upload-artifact@v7

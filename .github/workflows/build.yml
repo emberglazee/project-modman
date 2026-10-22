@@ -22,6 +22,12 @@ concurrency:
 
 jobs:
   build:
+    # Reusable workflows cannot elevate permissions: the caller has to grant
+    # what the attestation step needs.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/rust-build.yml
 
   # Scans each platform binary with VirusTotal and publishes a report in the run

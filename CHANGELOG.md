@@ -52,6 +52,12 @@ browser engine and no terminal.
 - Failed merges produce a **copyable diagnostics block**: the page, browser, mod
   list with sizes, game pak, number of reads and where it stopped. Reports built
   from that are actionable without a follow-up round trip.
+- Release binaries now carry signed build provenance. CI attests each artifact with
+  `actions/attest`, so a download can be traced to this repository, this workflow and
+  the exact commit that produced it with `gh attestation verify`. Unsigned binaries
+  cannot prove a publisher; this is the closest honest substitute, and the README has
+  the exact command. Attestation runs only on publishing events, because a fork pull
+  request never receives an OIDC token.
 - The browser page patches translations too: pick a `.locres`, download it as
   CSV, translate the CSV, then patch the strings back and download the
   `.locres`. Namespaces, hashes and order stay intact. Both directions were

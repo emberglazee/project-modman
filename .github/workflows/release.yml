@@ -144,6 +144,11 @@ jobs:
   # ── self-reports the version its release tag names.       ──
   build:
     needs: bump
+    # Same grant as build.yml: the release build attests what it ships.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/rust-build.yml
     with:
       ref: ${{ needs.bump.outputs.sha }}
