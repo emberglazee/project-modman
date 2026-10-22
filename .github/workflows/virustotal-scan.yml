@@ -65,8 +65,14 @@ jobs:
                   ;;
               esac
               cp "$f" "scan/$name"
+            # The CLI uploads a file literally named `modman`; the GUI uploads
+            # `dist/<artifact name>`, so its file is `modman-gui-linux-amd64`
+            # and a bare `-name modman-gui` matches nothing. Both platforms'
+            # suffixes are accepted here, and the report name comes from the
+            # artifact directory.
             done < <(find download -type f \( -name modman -o -name 'modman.exe' \
-                                          -o -name 'modman-gui' -o -name 'modman-gui.exe' \) )
+                                          -o -name 'modman-gui' -o -name 'modman-gui.exe' \
+                                          -o -name 'modman-gui-*' \) )
           fi
           if [ -n "${{ inputs.paths }}" ]; then
             shopt -s nullglob
