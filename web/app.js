@@ -419,3 +419,92 @@ initEngine()
   .catch((e) => {
     setError(`Failed to load the merge engine: ${e}`);
   });
+
+// ── Translations ─────────────────────────────────────────────────────────
+// Small files, no game pak needed: parse in wasm, patch the strings, hand the
+// result back as a download. Nothing leaves the page.
+
+const locresFileEl = $('locresFile');
+const locresCsvEl = $('locresCsv');
+const locresToCsvBtn = $('locresToCsvBtn');
+const locresPatchBtn = $('locresPatchBtn');
+const locresStatus = $('locresStatus');
+
+let locresBytes = null;
+let locresName = 'ProjectWingman.locres';
+let locresCsvText = null;
+
+function locresSay(msg) {
+  if (locresStatus) locresStatus.textContent = msg;
+}
+
+function downloadBytes(bytes, name, type) {
+  const blob = new Blob([bytes], { type: type || 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+async function readFileBytes(file) {
+  return new Uint8Array(await file.arrayBuffer());
+}
+
+if (locresFileEl) {
+  locresFileEl.addEventListener('change', async () => {
+    const f = locresFileEl.files[0];
+    if (!f) return;
+    try {
+      locresBytes = await readFileBytes(f);
+      locresName = f.name;
+      locresToCsvBtn.disabled = !wasmReady;
+      locresPatchBtn.disabled = !(wasmReady && locresCsvText);
+      locresSay(`${f.name} loaded (${fmtBytes(f.size)}).`);
+    } catch (e) {
+      locresSay(`Could not read ${f.name}: ${e}`);
+    }
+  });
+}
+
+if (locresCsvEl) {
+  locresCsvEl.addEventListener('change', async () => {
+    const f = locresCsvEl.files[0];
+    if (!f) return;
+    locresCsvText = await f.text();
+    locresPatchBtn.disabled = !(wasmReady && locresBytes);
+    const rows = locresCsvText.split(/\r?\n/).filter((l) => l.trim()).length - 1;
+    locresSay(`CSV loaded: about ${rows} row(s).`);
+  });
+}
+
+if (locresToCsvBtn) {
+  locresToCsvBtn.addEventListener('click', () => {
+    if (!wasmReady || !locresBytes) return;
+    try {
+      const csv = wasm_bindgen.locres_to_csv(locresBytes);
+      const name = locresName.replace(/\.locres$/i, '') + '.csv';
+      downloadBytes(csv, name, 'text/csv');
+      locresSay(`Saved ${name}.`);
+    } catch (e) {
+      locresSay(`Error: ${e}`);
+    }
+  });
+}
+
+if (locresPatchBtn) {
+  locresPatchBtn.addEventListener('click', () => {
+    if (!wasmReady || !locresBytes || !locresCsvText) return;
+    try {
+      const patched = wasm_bindgen.locres_patch(locresBytes, locresCsvText);
+      downloadBytes(patched.bytes, locresName);
+      locresSay(`Patched ${patched.patched} string(s); downloaded ${locresName}.`);
+    } catch (e) {
+      locresSay(`Error: ${e}`);
+    }
+  });
+}
+

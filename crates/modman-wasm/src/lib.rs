@@ -344,3 +344,64 @@ impl Default for MergeSession {
         Self::new()
     }
 }
+
+// ── Translations ─────────────────────────────────────────────────────────
+// Locres work is small-file work, so it fits the browser: nothing here needs a
+// sparse read of the game pak, and no file ever leaves the page.
+
+/// Convert a `.locres` file to CSV (one row per string).
+#[wasm_bindgen]
+pub fn locres_to_csv(bytes: &[u8]) -> Result<String, JsValue> {
+    let parsed = modman_core::locres::LocresFile::parse(bytes)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    Ok(parsed.to_csv())
+}
+
+/// A patched locres plus how many strings the CSV actually changed.
+#[wasm_bindgen]
+pub struct LocresPatch {
+    bytes: Vec<u8>,
+    patched: usize,
+}
+
+#[wasm_bindgen]
+impl LocresPatch {
+    #[wasm_bindgen(getter)]
+    pub fn bytes(&self) -> Vec<u8> {
+        self.bytes.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn patched(&self) -> usize {
+        self.patched
+    }
+}
+
+/// Apply translated strings from a CSV to a `.locres`, keeping the file's
+/// namespaces, hashes and order intact.
+#[wasm_bindgen]
+pub fn locres_patch(bytes: &[u8], csv: &str) -> Result<LocresPatch, JsValue> {
+    let mut parsed = modman_core::locres::LocresFile::parse(bytes)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let patched = parsed.patch_from_csv(csv);
+    Ok(LocresPatch {
+        bytes: parsed.write(),
+        patched,
+    })
+}
+
+/// Differences between two `.locres` files, for translators chasing a new game
+/// build.
+#[wasm_bindgen]
+pub fn locres_diff(a: &[u8], b: &[u8]) -> Result<String, JsValue> {
+    let fa =
+        modman_core::locres::LocresFile::parse(a).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let fb =
+        modman_core::locres::LocresFile::parse(b).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let diff = fa.diff(&fb);
+    Ok(format!(
+        "{} changed, {} added, {} removed",
+        diff.changed.len(),
+        diff.added.len(),
+        diff.removed.len()
+    ))
+}

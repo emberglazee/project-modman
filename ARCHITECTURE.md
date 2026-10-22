@@ -13,7 +13,7 @@ between the layers, and where a new feature belongs.
 | `modman-uasset` | `modman-uasset` | Reads and splices cooked `.uasset` and `.uexp` pairs: header, name and import tables, the DataTable walker, the byte editor, table rewriting, object-import insertion, SoundWave extraction, name hashing. Knows nothing about mods. | none |
 | `modman-core` | `modman-core` | Everything in between: manifests, templates, fragments, patch parsing, resolution, length-changing row operations, the merge pipeline, `combine`, locres, audio, component discovery. | pak, uasset |
 | `modman-cli` | `modman` | The command line. Argument parsing, path handling, progress and report output, file writing. | core, pak, uasset |
-| `modman-gui` | `modman-gui` | The native desktop app (egui). Native dialogs, archive extraction, progress, install-with-backup. Calls the same `combine::run_to_dir` as the CLI. | core, pak |
+| `modman-gui` | `modman-gui` | The native desktop app (egui): one tab per job (merge, build, audio, translations, pak, tools). Native dialogs, archive extraction, progress, install-with-backup. Every tab calls the same core function the CLI calls. | core, pak |
 | `modman-wasm` | `modman-wasm` | The browser frontend. Exposes `combine` to JavaScript and reads the game pak through a sparse `Read + Seek` source. | core, pak |
 
 `modman-wasm` deliberately shares `combine_sources` and the `PakSource` trait
@@ -46,8 +46,10 @@ build it with `cargo build -p modman`.
 | `merge.rs` | The per-mod pipeline: templating, resolver, apply, rowops, objectref, then hex patches. Later mods win. |
 | `hexpatch.rs` | `filePatches`: the HexPatch port, including its quirks. |
 | `combine.rs` | Merging plain override mods that carry no Sicario metadata: pair detection, class-based dispatch, three-way datatable delta merge against vanilla, import and name table merging, report assembly. |
+| `build.rs` | The Sicario build: gather components in provider order, apply variables, merge every mod's patches against the vanilla tables, write one pak. `gather` is shared with the CLI's dry-run preview so the preview and the build see one order. |
 | `locres.rs` | `.locres` parse, patch, diff and CSV interop. |
 | `audio.rs` | Lists and extracts SoundWave assets as Ogg. |
+| `combine::FilePakSource` | The public `PakSource` over a `.pak` on disk; the audio and locres readers take it too. |
 
 `modman-uasset` is organised the same way: `header.rs` (package header and
 counts), `names.rs` (name table), `export.rs` (export map), `walk.rs` (the

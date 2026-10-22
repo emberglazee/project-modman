@@ -414,73 +414,34 @@ fn main() {
 
                     use modman_core::components as comps;
 
-                    // --- Assemble merge components (C# provider parity) ---
-                    // Loose presets: *.dtp from given dirs + the install's
-                    // default search paths; direct file arguments load as-is.
-                    let mut search_dirs: Vec<std::path::PathBuf> = Vec::new();
-                    let mut direct_mods: Vec<modman_core::manifest::WingmanMod> = Vec::new();
-                    for pattern in &preset_paths {
-                        let pb = std::path::PathBuf::from(pattern);
-                        if pb.is_dir() {
-                            search_dirs.push(pb);
-                        } else {
-                            match load_mods_from_file(&pb) {
-                                Ok(mods) => direct_mods.extend(mods),
-                                Err(e) => eprintln!("  Load error {}: {}", pattern, e),
-                            }
+                    // One assembly, in core: the GUI runs exactly this.
+                    let gathered = match modman_core::build::gather(
+                        std::path::Path::new(&path),
+                        &preset_paths
+                            .iter()
+                            .map(std::path::PathBuf::from)
+                            .collect::<Vec<_>>(),
+                    ) {
+                        Ok(g) => g,
+                        Err(e) => {
+                            eprintln!("{}", e.message);
+                            std::process::exit(e.code);
                         }
+                    };
+                    for w in &gathered.warnings {
+                        eprintln!("  Warning: {w}");
                     }
-                    search_dirs.push(
-                        std::path::PathBuf::from(&path).join("ProjectWingman/Content/Presets"),
+                    for msg in &gathered.component_messages {
+                        println!("  {msg}");
+                    }
+                    println!(
+                        "Final mod will be built with {} parameters",
+                        gathered.params.len()
                     );
-                    search_dirs.push(game_paks.join("~mods"));
-                    search_dirs.push(game_paks.join("~presets"));
-                    let loose_files = comps::collect_dtp_files(&search_dirs);
-                    let (mut loose_comp, warnings) =
-                        comps::loose_component(&loose_files, comps::ENGINE_VERSION);
-                    for w in &warnings {
-                        eprintln!("  Warning: {w}");
-                    }
-                    for m in direct_mods {
-                        println!("  Loaded: {} (direct)", m.label());
-                        loose_comp.mods.push(m);
-                    }
-
-                    // Embedded components from installed paks.
-                    let scan = modman_core::discovery::scan_paks_dir(&game_paks);
-                    let (mut embedded, warnings) =
-                        comps::embedded_components(&scan, comps::ENGINE_VERSION);
-                    for w in &warnings {
-                        eprintln!("  Warning: {w}");
-                    }
-
-                    // Provider order (also the report order):
-                    // embeddedPresets, sicarioRequests, loosePresets, customSkins.
-                    let mut components: Vec<comps::MergeComponent> = Vec::new();
-                    components.append(&mut embedded);
-                    components.push(loose_comp);
-                    let (skin_comp, _skin_warnings) = comps::skin_component(&game_paks);
-                    if let Some(sc) = skin_comp {
-                        components.push(sc);
-                    }
-                    for c in &components {
-                        println!("  {}", c.message);
-                    }
-
-                    let inputs = comps::merged_params(&components);
-                    println!("Final mod will be built with {} parameters", inputs.len());
-
-                    let mut all_mods = comps::take_ordered_mods(&mut components);
-                    if all_mods.is_empty() {
-                        eprintln!("No mods or presets found to build!");
-                        std::process::exit(1);
-                    }
-                    println!("Queuing mod build with {} mods", all_mods.len());
-
-                    // Apply the template pipeline (vars + enableSteps + patch render).
-                    for m in &mut all_mods {
-                        modman_core::templating::apply_variables_to_mod(m, &inputs);
-                    }
+                    println!("Queuing mod build with {} mods", gathered.mods.len());
+                    let inputs = gathered.params;
+                    let components = gathered.components;
+                    let all_mods = gathered.mods;
 
                     if let Some(out_dir) = output.as_ref() {
                         // === WRITE MODE: merge + emit a real mod pak ===
@@ -503,13 +464,22 @@ fn main() {
                             }
                             files
                         };
-                        match build_pak_from_mods(
+                        match modman_core::build::build_pak(
                             &game_paks,
                             &mod_refs,
                             &extra_files,
                             &out_dir,
                             "SicarioMerge_P.pak",
-                            true,
+                            &mut |stage| {
+                                if let modman_core::build::BuildStage::Merging {
+                                    target,
+                                    index,
+                                    total,
+                                } = stage
+                                {
+                                    println!("Merging: {target} ({index}/{total})");
+                                }
+                            },
                         ) {
                             Ok((ok, total, field_conflicts)) => {
                                 println!(
@@ -542,7 +512,7 @@ fn main() {
                                 );
                             }
                             Err(e) => {
-                                eprintln!("{}", e.msg);
+                                eprintln!("{}", e.message);
                                 std::process::exit(e.code);
                             }
                         }
@@ -855,8 +825,13 @@ fn main() {
                     }
                 };
                 let pak_name = format!("{base}_P.pak");
-                match build_pak_from_mods(
-                    &game_paks, &mod_refs, &extra, &out_root, &pak_name, false,
+                match modman_core::build::build_pak(
+                    &game_paks,
+                    &mod_refs,
+                    &extra,
+                    &out_root,
+                    &pak_name,
+                    &mut |_| {},
                 ) {
                     Ok(_) => println!(
                         "'{}' built to '{}'",
@@ -865,7 +840,9 @@ fn main() {
                             .unwrap_or_default(),
                         out_root.join(&pak_name).display()
                     ),
-                    Err(e) => eprintln!("  Error building {}: {e}", file.display()),
+                    Err(e) => {
+                        eprintln!("  Error building {}: {}", file.display(), e.message)
+                    }
                 }
             }
         }
@@ -1333,32 +1310,6 @@ fn pause_for_enter() {
     let _ = std::io::stdin().read_line(&mut buf);
 }
 
-/// Load all mods from a file or directory (kind-aware, lenient).
-fn load_mods_from_file(
-    path: &std::path::Path,
-) -> Result<Vec<modman_core::manifest::WingmanMod>, String> {
-    let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let mut v: serde_json::Value =
-        serde_json::from_str(&modman_core::manifest::sanitize_json(&raw))
-            .map_err(|e| e.to_string())?;
-    modman_core::manifest::normalize_json_keys(&mut v);
-    let obj = v.as_object().ok_or("not a JSON object")?;
-    if obj.contains_key("request") {
-        Ok(modman_core::manifest::parse_meta_request_json(&raw)
-            .map_err(|e| e.to_string())?
-            .request
-            .mods)
-    } else if obj.contains_key("mods") {
-        Ok(modman_core::manifest::parse_preset_json(&raw)
-            .map_err(|e| e.to_string())?
-            .mods)
-    } else {
-        Ok(vec![
-            modman_core::manifest::parse_mod_json(&raw).map_err(|e| e.to_string())?
-        ])
-    }
-}
-
 fn print_mod_summary(m: &modman_core::manifest::WingmanMod, indent: &str) {
     let flags = if m.sicario.overwrites {
         " [overwrites]"
@@ -1820,190 +1771,6 @@ fn normalize_install_path(raw: &str) -> (String, Option<String>) {
         }
     }
     (raw.to_string(), None)
-}
-
-struct BuildFail {
-    code: i32,
-    msg: String,
-}
-
-impl BuildFail {
-    fn new(code: i32, msg: impl Into<String>) -> Self {
-        Self {
-            code,
-            msg: msg.into(),
-        }
-    }
-}
-
-impl From<String> for BuildFail {
-    fn from(msg: String) -> Self {
-        // Generic/unhandled errors keep the historical exit code.
-        Self { code: 1, msg }
-    }
-}
-
-impl std::fmt::Display for BuildFail {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.msg)
-    }
-}
-
-fn build_pak_from_mods(
-    game_paks: &std::path::Path,
-    mods: &[&modman_core::manifest::WingmanMod],
-    extra_files: &[(String, Vec<u8>)],
-    out_dir: &std::path::Path,
-    pak_name: &str,
-    verbose: bool,
-) -> Result<(usize, usize, Vec<String>), BuildFail> {
-    let staging = out_dir.join("staging");
-    let _ = std::fs::remove_dir_all(&staging);
-    std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
-
-    // Targets = union of every mod's asset + hex patch targets.
-    let mut targets: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let mut asset_targets: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for m in mods {
-        targets.extend(m.asset_patches.keys().cloned());
-        targets.extend(m.file_patches.keys().cloned());
-        asset_targets.extend(m.asset_patches.keys().cloned());
-    }
-
-    let main_pak_path = game_paks.join("pakchunk0-WindowsNoEditor.pak");
-    let pak =
-        modman_pak::PakArchive::open(&main_pak_path).map_err(|e| format!("Pak error: {e}"))?;
-    let all_files = pak.files();
-    let extract_dir = std::env::temp_dir().join("modman-build");
-    let _ = std::fs::remove_dir_all(&extract_dir);
-    std::fs::create_dir_all(&extract_dir).map_err(|e| e.to_string())?;
-
-    // Load every target (plus .uexp/.uasset sidecars) into a virtual file map,
-    // like the C# build context.
-    let mut files: modman_core::merge::FileMap = modman_core::merge::FileMap::new();
-    let find_entry = |name: &str| -> Option<String> {
-        all_files
-            .iter()
-            .find(|f| f.as_str() == name)
-            .or_else(|| all_files.iter().find(|f| f.ends_with(name)))
-            .cloned()
-    };
-    for target in &targets {
-        let needle = target.trim_start_matches("../../../").replace('\\', "/");
-        let mut wanted = vec![needle.clone()];
-        if needle.ends_with(".uexp") {
-            wanted.push(needle.replace(".uexp", ".uasset"));
-        } else if needle.ends_with(".uasset") {
-            wanted.push(needle.replace(".uasset", ".uexp"));
-        }
-        for w in wanted {
-            let Some(entry) = find_entry(&w) else {
-                continue;
-            };
-            if files.contains_key(&entry) {
-                continue;
-            }
-            let stem = std::path::Path::new(&entry)
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| "asset".to_string());
-            let ext = std::path::Path::new(&entry)
-                .extension()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let local = extract_dir.join(format!("{stem}.{ext}"));
-            if let Err(e) = pak.extract_entry(&entry, &local) {
-                eprintln!("  Extract error ({entry}): {e}");
-                continue;
-            }
-            files.insert(entry, std::fs::read(&local).map_err(|e| e.to_string())?);
-        }
-    }
-
-    // Phase 1 (engine-major): hex patches for all mods, including the .uexp
-    // length auto-correct.
-    modman_core::merge::apply_hex_phase(&mut files, mods).map_err(|e| {
-        let code = match e {
-            modman_core::apply::ApplyError::Asset(_) => 412,
-            _ => 422,
-        };
-        BuildFail::new(code, format!("Hex patch error: {e}"))
-    })?;
-
-    // Phase 2: DataTable asset patches for all mods.
-    let mut ok = 0usize;
-    let mut field_conflicts: Vec<String> = Vec::new();
-    for target in &asset_targets {
-        if verbose {
-            println!("Merging: {target}");
-        }
-        let needle = target.trim_start_matches("../../../").replace('\\', "/");
-        let uexp_needle = if needle.ends_with(".uexp") {
-            needle.clone()
-        } else if needle.ends_with(".uasset") {
-            needle.replace(".uasset", ".uexp")
-        } else {
-            format!("{needle}.uexp")
-        };
-        let uasset_needle = uexp_needle.replace(".uexp", ".uasset");
-        let (Some(uexp_key), Some(uasset_key)) = (
-            modman_core::merge::resolve_target(&files, &uexp_needle).cloned(),
-            modman_core::merge::resolve_target(&files, &uasset_needle).cloned(),
-        ) else {
-            // C# parity: a patch targeting a file that isn't in the game
-            // aborts with 412 (SourceFileNotFoundException).
-            return Err(BuildFail::new(
-                412,
-                format!("no pak entries for '{target}' (patch targets a missing file)"),
-            ));
-        };
-        let uasset = files.get(&uasset_key).unwrap().clone();
-        let uexp = files.get(&uexp_key).unwrap().clone();
-        let merged = modman_core::merge::merge_mods(&uasset, &uexp, mods, target)
-            .map_err(|e| BuildFail::new(422, format!("Merge error on {target}: {e}")))?;
-        if verbose {
-            println!(
-                "  -> {} bytes uexp, {} bytes uasset",
-                merged.uexp.len(),
-                merged.uasset.len()
-            );
-        }
-        let short = target.split('/').next_back().unwrap_or(target).to_string();
-        field_conflicts.extend(merged.conflicts.iter().map(|c| format!("{short}: {c}")));
-        files.insert(uasset_key, merged.uasset);
-        files.insert(uexp_key, merged.uexp);
-        ok += 1;
-    }
-
-    for (key, bytes) in extra_files {
-        files.insert(key.clone(), bytes.clone());
-    }
-
-    // Write every file in the map into the staging dir.
-    for (key, bytes) in &files {
-        let out_path = staging.join(key);
-        if let Some(parent) = out_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        std::fs::write(&out_path, bytes).map_err(|e| e.to_string())?;
-    }
-    if files.is_empty() {
-        return Err("No targets merged.".to_string().into());
-    }
-
-    let pak_out = out_dir.join(pak_name);
-    modman_pak::pack(
-        &staging,
-        &pak_out,
-        modman_pak::Version::V3,
-        "../../../".to_string(),
-        None,
-    )
-    .map_err(|e| format!("Pack error: {e}"))?;
-    // The staging dir is a scratch area; the C# transport left none behind,
-    // and in the Vortex flow it would be deployed to the game as junk files.
-    let _ = std::fs::remove_dir_all(out_dir.join("staging"));
-    Ok((ok, files.len(), field_conflicts))
 }
 
 /// Print the consolidated end-of-merge report: order, conflicts, warnings.

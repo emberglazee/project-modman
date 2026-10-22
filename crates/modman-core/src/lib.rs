@@ -8,6 +8,7 @@
 
 pub mod apply;
 pub mod audio;
+pub mod build;
 pub mod combine;
 pub mod components;
 pub mod discovery;

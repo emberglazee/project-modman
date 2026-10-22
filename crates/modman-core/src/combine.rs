@@ -1905,9 +1905,12 @@ pub struct CombineRun {
     pub skipped: Vec<String>,
 }
 
-struct ArchiveSource<'a>(&'a modman_pak::PakArchive);
+/// A [`PakSource`] over a `.pak` file on disk. Public because every frontend
+/// needs it: `combine` uses it internally, and the audio/locres readers take a
+/// `PakSource` too.
+pub struct FilePakSource<'a>(pub &'a modman_pak::PakArchive);
 
-impl PakSource for ArchiveSource<'_> {
+impl PakSource for FilePakSource<'_> {
     fn files(&self) -> Vec<String> {
         self.0.files()
     }
@@ -1936,7 +1939,7 @@ pub fn run_to_dir(
 
     let base_archive = modman_pak::PakArchive::open(base_pak)
         .map_err(|e| format!("{}: {e}", base_pak.display()))?;
-    let base_src = ArchiveSource(&base_archive);
+    let base_src = FilePakSource(&base_archive);
 
     let mut archives = Vec::with_capacity(mod_paks.len());
     let mut labels = Vec::with_capacity(mod_paks.len());
@@ -1954,7 +1957,7 @@ pub fn run_to_dir(
         labels.push(label);
         archives.push(archive);
     }
-    let srcs: Vec<ArchiveSource> = archives.iter().map(ArchiveSource).collect();
+    let srcs: Vec<FilePakSource> = archives.iter().map(FilePakSource).collect();
     let src_refs: Vec<&dyn PakSource> = srcs.iter().map(|s| s as &dyn PakSource).collect();
 
     on_stage(&CombineStage::Merging);

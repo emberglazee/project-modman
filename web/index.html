@@ -87,6 +87,24 @@
     <p class="hint">Drop it into your <code>~mods</code> folder and remove the original conflicting paks.</p>
     <div id="report"></div>
   </section>
+  <section class="card" id="translate">
+    <h2>Translations</h2>
+    <p class="hint">
+      A <code>.locres</code> is the game's string table. Turn one into a CSV, translate the CSV,
+      then patch the strings back in. Namespaces, hashes and order stay intact, which is what the
+      game's lookups depend on.
+    </p>
+    <p>
+      <label class="btn secondary">Choose a .locres…<input type="file" id="locresFile" accept=".locres" hidden></label>
+      <button class="btn secondary" id="locresToCsvBtn" disabled>Download it as CSV</button>
+    </p>
+    <p>
+      <label class="btn secondary">Choose the translated CSV…<input type="file" id="locresCsv" accept=".csv,text/csv" hidden></label>
+      <button class="btn primary" id="locresPatchBtn" disabled>Patch and download .locres</button>
+    </p>
+    <p class="hint" id="locresStatus">Nothing loaded yet.</p>
+  </section>
+
 </main>
 
 <footer>

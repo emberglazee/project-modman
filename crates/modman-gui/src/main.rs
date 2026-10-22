@@ -1,22 +1,25 @@
 //! modman-gui — the native desktop front end.
 //!
-//! The merge itself is `modman_core::combine::run_to_dir`, the same function
-//! the CLI runs, so this window adds no merge behaviour of its own. What it
-//! adds is the part a terminal cannot give a non-technical user: native file
-//! dialogs, archive extraction (zip / 7z / rar, all pure Rust), a progress
-//! bar, and an install step that backs up what it replaces.
+//! Every operation calls into `modman-core`, the same code the CLI runs, so the
+//! GUI cannot grow behaviour the command line does not have. The window is a
+//! shell: a tab bar, one job at a time on a worker thread, and a log.
+
+mod archive;
+mod job;
+mod tabs;
 
 use eframe::egui;
-use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver, Sender};
-
-use modman_core::combine::{CombineOptions, CombineRun, CombineStage};
+use job::{Job, Msg};
+use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
+use tabs::Tab;
 
 /// Paths may be passed on the command line ("open with"), and `--merge-now`
-/// starts the merge immediately so CI can smoke-test the real code path.
+/// starts a merge immediately so CI can smoke-test the real code path.
 struct Args {
     paths: Vec<PathBuf>,
     merge_now: bool,
+    build_now: bool,
     exit_when_done: bool,
     version: bool,
     out: Option<PathBuf>,
@@ -26,6 +29,7 @@ fn parse_args() -> Args {
     let mut args = Args {
         paths: Vec::new(),
         merge_now: false,
+        build_now: false,
         exit_when_done: false,
         version: false,
         out: None,
@@ -34,6 +38,7 @@ fn parse_args() -> Args {
     while let Some(a) = it.next() {
         match a.as_str() {
             "--merge-now" => args.merge_now = true,
+            "--build-now" => args.build_now = true,
             "--exit-when-done" => args.exit_when_done = true,
             "--version" | "-V" => args.version = true,
             "--out" => args.out = it.next().map(PathBuf::from),
@@ -53,8 +58,8 @@ fn main() -> eframe::Result<()> {
     }
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([940.0, 680.0])
-            .with_min_inner_size([720.0, 520.0])
+            .with_inner_size([960.0, 720.0])
+            .with_min_inner_size([780.0, 560.0])
             .with_title("Project Modman"),
         ..Default::default()
     };
@@ -65,28 +70,25 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-enum Msg {
-    Stage(CombineStage),
-    Extracting {
-        label: String,
-        done: usize,
-        total: usize,
-    },
-    Done(Result<CombineRun, String>),
-}
-
 struct App {
     game_root: Option<PathBuf>,
     paks_dir: Option<PathBuf>,
-    inputs: Vec<PathBuf>,
-    out_dir: PathBuf,
-    status: String,
-    running: bool,
+    tab: Tab,
+    merge: tabs::merge::MergeTab,
+    build: tabs::build::BuildTab,
+    audio: tabs::audio::AudioTab,
+    locres: tabs::locres::LocresTab,
+    pak: tabs::pak::PakTab,
+    tools: tabs::tools::ToolsTab,
     rx: Option<Receiver<Msg>>,
-    result: Option<CombineRun>,
-    error: Option<String>,
+    running: bool,
+    status: String,
+    log: String,
+    /// The pak the finished job produced, ready to install into `~mods`.
+    install_path: Option<PathBuf>,
     installed: Option<String>,
     auto_merge: bool,
+    auto_build: bool,
     exit_when_done: bool,
     ctx: egui::Context,
 }
@@ -101,141 +103,49 @@ impl App {
         let out_dir = args
             .out
             .unwrap_or_else(|| std::env::temp_dir().join("modman-gui-out"));
+        let out_for_build = out_dir.clone();
+        let mut merge = tabs::merge::MergeTab::new(out_dir);
+        merge.add_paths(args.paths.clone());
+
         App {
             game_root,
             paks_dir,
-            inputs: args.paths,
-            out_dir,
+            tab: Tab::Merge,
+            merge,
+            build: {
+                let mut b = tabs::build::BuildTab::new(out_for_build);
+                b.inputs = args.paths;
+                b
+            },
+            audio: tabs::audio::AudioTab::new(std::env::temp_dir().join("modman-gui-audio")),
+            locres: tabs::locres::LocresTab::new(std::env::temp_dir().join("modman-gui-locres")),
+            pak: tabs::pak::PakTab::new(std::env::temp_dir().join("modman-gui-pak")),
+            tools: tabs::tools::ToolsTab::new(),
+            rx: None,
+            running: false,
             status: match detected {
                 Some(g) => format!("Game found: {}", g.path.display()),
                 None => "Game not found. Choose the Project Wingman folder.".to_string(),
             },
-            running: false,
-            rx: None,
-            result: None,
-            error: None,
+            log: String::new(),
+            install_path: None,
             installed: None,
             auto_merge: args.merge_now,
+            auto_build: args.build_now,
             exit_when_done: args.exit_when_done,
             ctx: cc.egui_ctx.clone(),
         }
     }
 
-    fn add_paths(&mut self, paths: Vec<PathBuf>) {
-        for p in paths {
-            let is_mod = p
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| {
-                    let e = e.to_ascii_lowercase();
-                    matches!(e.as_str(), "pak" | "zip" | "7z" | "rar")
-                })
-                .unwrap_or(false);
-            if is_mod && !self.inputs.contains(&p) {
-                self.inputs.push(p);
-            }
-        }
-        self.inputs.sort();
-    }
-
-    fn start_merge(&mut self) {
-        let Some(paks_dir) = self.paks_dir.clone() else {
-            self.error = Some("No game install selected.".to_string());
-            return;
-        };
-        if self.inputs.is_empty() {
-            return;
-        }
-
+    fn start(&mut self, job: Job, is_merge: bool) {
         self.running = true;
-        self.error = None;
-        self.result = None;
-        self.installed = None;
-        self.status = "Preparing…".to_string();
-
-        let (tx, rx): (Sender<Msg>, Receiver<Msg>) = channel();
-        self.rx = Some(rx);
-
-        let inputs = self.inputs.clone();
-        let out_dir = self.out_dir.clone();
-        let ctx = self.ctx.clone();
-        let base = paks_dir.join("pakchunk0-WindowsNoEditor.pak");
-
-        std::thread::spawn(move || {
-            let send = |m: Msg| {
-                let _ = tx.send(m);
-                ctx.request_repaint();
-            };
-
-            // 1. Resolve inputs to paks, extracting archives on the way.
-            let mut paks: Vec<PathBuf> = Vec::new();
-            let total = inputs.len();
-            for (i, path) in inputs.iter().enumerate() {
-                let label = path
-                    .file_name()
-                    .map(|f| f.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path.display().to_string());
-                send(Msg::Extracting {
-                    label: label.clone(),
-                    done: i,
-                    total,
-                });
-
-                if path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|e| e.eq_ignore_ascii_case("pak"))
-                {
-                    paks.push(path.clone());
-                    continue;
-                }
-
-                let stem = path
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| format!("mod{i}"));
-                let dest = std::env::temp_dir().join("modman-gui-extract").join(&stem);
-                let _ = std::fs::remove_dir_all(&dest);
-
-                let extracted = match extract_archive(path, &dest) {
-                    Ok(n) => n,
-                    Err(e) => {
-                        send(Msg::Done(Err(format!("{label}: {e}"))));
-                        return;
-                    }
-                };
-                if extracted == 0 {
-                    send(Msg::Done(Err(format!(
-                        "{label}: no .pak files inside the archive"
-                    ))));
-                    return;
-                }
-                paks.extend(collect_paks(&dest));
-            }
-            paks.sort();
-            if paks.is_empty() {
-                send(Msg::Done(Err("no mod paks to merge".to_string())));
-                return;
-            }
-
-            // 2. The shared merge, reporting each stage back to the UI.
-            let tx2 = tx.clone();
-            let ctx2 = ctx.clone();
-            let run = modman_core::combine::run_to_dir(
-                &base,
-                &paks,
-                &out_dir,
-                &CombineOptions {
-                    datatables_only: false,
-                    ..Default::default()
-                },
-                |stage| {
-                    let _ = tx2.send(Msg::Stage(stage.clone()));
-                    ctx2.request_repaint();
-                },
-            );
-            send(Msg::Done(run));
-        });
+        self.status = "Working…".to_string();
+        self.log.clear();
+        if is_merge {
+            self.installed = None;
+        }
+        self.install_path = None;
+        self.rx = Some(job::spawn(job, self.ctx.clone()));
     }
 
     fn poll(&mut self) {
@@ -244,47 +154,23 @@ impl App {
         let mut finished = false;
         while let Ok(msg) = rx.try_recv() {
             match msg {
-                Msg::Extracting { label, done, total } => {
-                    self.status = format!("Extracting {label} ({}/{total})…", done + 1);
-                }
-                Msg::Stage(stage) => {
-                    eprintln!("stage: {stage:?}");
-                    self.status = match stage {
-                        CombineStage::Opening {
-                            index,
-                            total,
-                            label,
-                        } => {
-                            format!("Reading {label} ({index}/{total})…")
-                        }
-                        CombineStage::Merging => "Merging datatables…".to_string(),
-                        CombineStage::Writing { files } => {
-                            format!("Writing {files} file(s) to disk…")
-                        }
-                        CombineStage::Packing => "Packing the merged pak…".to_string(),
-                    };
-                }
+                Msg::Stage(text) => self.status = text,
                 Msg::Done(res) => {
                     finished = true;
                     self.running = false;
                     match res {
-                        Ok(run) => {
-                            self.status = format!(
-                                "Merged {} datatable(s), {} file(s) total.",
-                                run.merged, run.files
-                            );
-                            eprintln!(
-                                "MERGED {} datatable(s), {} file(s) -> {}",
-                                run.merged,
-                                run.files,
-                                run.output.display()
-                            );
-                            self.result = Some(run);
+                        Ok(out) => {
+                            self.status = "Done.".to_string();
+                            self.log.push_str(&out.report);
+                            self.log.push('\n');
+                            eprintln!("DONE {}", out.report);
+                            self.install_path = out.install;
                         }
                         Err(e) => {
-                            eprintln!("FAILED {e}");
-                            self.error = Some(e);
                             self.status = "Failed.".to_string();
+                            self.log.push_str(&format!("Error: {e}\n"));
+                            eprintln!("FAILED {e}");
+                            self.install_path = None;
                         }
                     }
                 }
@@ -298,12 +184,16 @@ impl App {
     }
 
     fn install(&mut self) {
-        let (Some(run), Some(paks_dir)) = (&self.result, &self.paks_dir) else {
+        let (Some(built), Some(paks)) = (self.install_path.clone(), self.paks_dir.clone()) else {
             return;
         };
-        match install_to_mods(&run.output, paks_dir) {
-            Ok(path) => self.installed = Some(path.display().to_string()),
-            Err(e) => self.error = Some(format!("install: {e}")),
+        let name = built
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| "mod_P.pak".to_string());
+        match archive::install_to_mods(&built, &paks, &name) {
+            Ok(p) => self.installed = Some(p.display().to_string()),
+            Err(e) => self.log.push_str(&format!("install: {e}\n")),
         }
     }
 }
@@ -311,15 +201,35 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
-        if self.auto_merge && !self.running && self.result.is_none() {
+
+        if self.auto_merge && !self.running {
             self.auto_merge = false;
-            if !self.inputs.is_empty() && self.paks_dir.is_some() {
-                self.start_merge();
+            if !self.merge.inputs.is_empty() {
+                if let Some(paks) = self.paks_dir.clone() {
+                    let job = Job::Merge {
+                        base_pak: paks.join("pakchunk0-WindowsNoEditor.pak"),
+                        inputs: self.merge.inputs.clone(),
+                        out_dir: self.merge.out_dir.clone(),
+                    };
+                    self.start(job, true);
+                }
             }
         }
-        self.poll();
 
-        // Drag and drop anywhere on the window.
+        if self.auto_build && !self.running {
+            self.auto_build = false;
+            if let Some(root) = self.game_root.clone() {
+                let job = Job::Build {
+                    game_root: root,
+                    inputs: self.build.inputs.clone(),
+                    out_dir: self.build.out_dir.clone(),
+                    embed_skins: self.build.embed_skins,
+                };
+                self.start(job, false);
+            }
+        }
+
+        // Drag and drop anywhere on the window feeds the merge tab.
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
                 .dropped_files
@@ -328,14 +238,18 @@ impl eframe::App for App {
                 .collect()
         });
         if !dropped.is_empty() {
-            self.add_paths(dropped);
+            self.merge.add_paths(dropped);
+            self.tab = Tab::Merge;
         }
+
+        self.poll();
 
         egui::Panel::top("top").show(root, |ui| {
             ui.add_space(6.0);
-            ui.heading("Project Modman");
-            ui.label("Merge Project Wingman mods that fight over the same files.");
-            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.heading("Project Modman");
+                ui.label(egui::RichText::new("for Project Wingman").small().weak());
+            });
             ui.horizontal(|ui| {
                 if ui.button("Choose game folder…").clicked() {
                     if let Some(dir) = rfd::FileDialog::new().pick_folder() {
@@ -345,21 +259,40 @@ impl eframe::App for App {
                             self.game_root = Some(dir);
                             self.status = "Game folder set.".to_string();
                         } else {
-                            self.error = Some(format!(
-                                "{} does not contain ProjectWingman/Content/Paks",
+                            self.log = format!(
+                                "{} does not contain ProjectWingman/Content/Paks\n",
                                 dir.display()
-                            ));
+                            );
                         }
                     }
                 }
                 match &self.game_root {
-                    Some(p) => ui.label(format!("Game: {}", p.display())),
+                    Some(p) => ui.label(
+                        egui::RichText::new(format!("Game: {}", p.display()))
+                            .small()
+                            .weak(),
+                    ),
                     None => {
                         ui.colored_label(egui::Color32::from_rgb(255, 150, 90), "Game: not found")
                     }
                 };
             });
-            ui.add_space(6.0);
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                for tab in [
+                    Tab::Merge,
+                    Tab::Build,
+                    Tab::Audio,
+                    Tab::Locres,
+                    Tab::Pak,
+                    Tab::Tools,
+                ] {
+                    if ui.selectable_label(self.tab == tab, tab.label()).clicked() {
+                        self.tab = tab;
+                    }
+                }
+            });
+            ui.add_space(4.0);
         });
 
         egui::Panel::bottom("status").show(root, |ui| {
@@ -369,6 +302,12 @@ impl eframe::App for App {
                     ui.spinner();
                 }
                 ui.label(&self.status);
+                if !self.running
+                    && self.install_path.is_some()
+                    && ui.button("Install into ~mods").clicked()
+                {
+                    self.install();
+                }
             });
             if let Some(inst) = &self.installed {
                 ui.colored_label(
@@ -376,255 +315,62 @@ impl eframe::App for App {
                     format!("Installed: {inst} (restart the game to load it)"),
                 );
             }
+            if !self.log.is_empty() {
+                egui::ScrollArea::vertical()
+                    .max_height(140.0)
+                    .show(ui, |ui| {
+                        let mut text = self.log.as_str();
+                        ui.add(
+                            egui::TextEdit::multiline(&mut text)
+                                .desired_width(f32::INFINITY)
+                                .font(egui::TextStyle::Monospace),
+                        );
+                    });
+            }
             ui.add_space(4.0);
         });
 
-        egui::CentralPanel::default().show(root, |ui| {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if ui.button("Add archives or paks…").clicked() {
-                    if let Some(files) = rfd::FileDialog::new()
-                        .add_filter("mods", &["pak", "zip", "7z", "rar"])
-                        .pick_files()
-                    {
-                        self.add_paths(files);
-                    }
-                }
-                if ui.button("Add a folder…").clicked() {
-                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                        self.add_paths(collect_paks(&dir));
-                    }
-                }
-                if ui.button("Clear").clicked() {
-                    self.inputs.clear();
-                }
-            });
-            ui.label(
-                egui::RichText::new("Drop .rar, .7z, .zip or .pak files anywhere on this window.")
-                    .small()
-                    .weak(),
-            );
-            ui.add_space(6.0);
+        let game_paks = self.paks_dir.clone();
+        let game_pak = game_paks
+            .as_ref()
+            .map(|p| p.join("pakchunk0-WindowsNoEditor.pak"));
+        let mut job: Option<(Job, bool)> = None;
 
-            egui::ScrollArea::vertical()
-                .max_height(220.0)
-                .show(ui, |ui| {
-                    for p in &self.inputs {
-                        let name = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-                        let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
-                        ui.label(format!("{name}  ({:.1} MB)", size as f64 / 1_048_576.0));
-                    }
-                    if self.inputs.is_empty() {
-                        ui.weak("Nothing added yet.");
-                    }
-                });
-
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label("Output folder:");
-                ui.label(
-                    egui::RichText::new(self.out_dir.display().to_string())
-                        .small()
-                        .weak(),
-                );
-                if ui.button("Change…").clicked() {
-                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                        self.out_dir = dir;
-                    }
+        egui::CentralPanel::default().show(root, |ui| match self.tab {
+            Tab::Merge => {
+                if let Some(j) = self.merge.ui(ui, game_paks.as_deref()) {
+                    job = Some((j, true));
                 }
-            });
-
-            ui.add_space(10.0);
-            let can_merge = !self.running && !self.inputs.is_empty() && self.paks_dir.is_some();
-            if ui
-                .add_enabled(can_merge, egui::Button::new("Merge"))
-                .clicked()
-            {
-                self.start_merge();
             }
-
-            if let Some(err) = &self.error {
-                ui.add_space(8.0);
-                ui.colored_label(egui::Color32::from_rgb(255, 120, 120), err);
-            }
-
-            let result_snapshot = self.result.clone();
-            let mut install_clicked = false;
-            if let Some(run) = &result_snapshot {
-                ui.separator();
-                ui.heading("Report");
-                ui.label(format!(
-                    "Merged {} datatable(s), {} file(s) total",
-                    run.merged, run.files
-                ));
-                ui.label(
-                    egui::RichText::new(format!("Written to {}", run.output.display()))
-                        .small()
-                        .weak(),
-                );
-
-                if ui.button("Install into ~mods").clicked() {
-                    install_clicked = true;
+            Tab::Build => {
+                if let Some(j) = self.build.ui(ui, self.game_root.as_deref()) {
+                    job = Some((j, false));
                 }
-                ui.label(
-                    egui::RichText::new(
-                        "Install backs up an existing SicarioCombine_P.pak first. Move the mod paks you \
-                         merged out of ~mods afterwards, or the game loads the same edits twice.",
-                    )
-                    .small()
-                    .weak(),
-                );
-
-                egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
-                    if !run.field_conflicts.is_empty() {
-                        ui.add_space(6.0);
-                        ui.strong("Field conflicts (later mod won)");
-                        for c in &run.field_conflicts {
-                            ui.label(egui::RichText::new(c).small());
-                        }
-                    }
-                    if !run.pass_through_conflicts.is_empty() {
-                        ui.add_space(6.0);
-                        ui.strong("Files that cannot be combined (last kept)");
-                        for c in &run.pass_through_conflicts {
-                            ui.label(egui::RichText::new(c).small());
-                        }
-                    }
-                    if !run.warnings.is_empty() {
-                        ui.add_space(6.0);
-                        ui.strong("Warnings");
-                        for w in &run.warnings {
-                            ui.label(egui::RichText::new(w).small());
-                        }
-                    }
-                });
             }
-            if install_clicked {
-                self.install();
+            Tab::Audio => {
+                if let Some(j) = self.audio.ui(ui, game_pak.as_deref()) {
+                    job = Some((j, false));
+                }
+            }
+            Tab::Locres => {
+                if let Some(j) = self.locres.ui(ui, game_pak.as_deref()) {
+                    job = Some((j, false));
+                }
+            }
+            Tab::Pak => {
+                if let Some(j) = self.pak.ui(ui) {
+                    job = Some((j, false));
+                }
+            }
+            Tab::Tools => {
+                if let Some(j) = self.tools.ui(ui, game_paks.as_deref()) {
+                    job = Some((j, false));
+                }
             }
         });
-    }
-}
 
-// ── Archives ──────────────────────────────────────────────────────────────
-
-/// Reject absolute paths and `..` so a hostile archive cannot write outside
-/// the extraction directory.
-fn safe_join(dest: &Path, name: &[u8]) -> Option<PathBuf> {
-    let name = String::from_utf8_lossy(name).replace('\\', "/");
-    if name.starts_with('/') || name.contains(':') {
-        return None;
-    }
-    let mut out = dest.to_path_buf();
-    for part in name.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => return None,
-            p => out.push(p),
+        if let Some((job, is_merge)) = job {
+            self.start(job, is_merge);
         }
     }
-    Some(out)
-}
-
-/// Extract one archive into `dest`, returning how many files landed.
-fn extract_archive(path: &Path, dest: &Path) -> Result<usize, String> {
-    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-
-    match ext.as_str() {
-        "zip" => {
-            let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-            let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
-            archive.extract(dest).map_err(|e| e.to_string())?;
-        }
-        "7z" => {
-            sevenz_rust::decompress_file(path, dest).map_err(|e| e.to_string())?;
-        }
-        "rar" => {
-            let archive = rars::ArchiveReader::read_path(path).map_err(|e| e.to_string())?;
-            let mut failed: Option<String> = None;
-            archive
-                .extract_to(None, |meta| {
-                    let Some(out) = safe_join(dest, &meta.name) else {
-                        failed = Some(format!(
-                            "refused unsafe path: {}",
-                            String::from_utf8_lossy(&meta.name)
-                        ));
-                        return Ok(Box::new(std::io::sink()));
-                    };
-                    if meta.is_directory {
-                        let _ = std::fs::create_dir_all(&out);
-                        return Ok(Box::new(std::io::sink()));
-                    }
-                    if let Some(parent) = out.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    match std::fs::File::create(&out) {
-                        Ok(f) => Ok(Box::new(f) as Box<dyn std::io::Write>),
-                        Err(e) => {
-                            failed = Some(format!("{}: {e}", out.display()));
-                            Ok(Box::new(std::io::sink()))
-                        }
-                    }
-                })
-                .map_err(|e| e.to_string())?;
-            if let Some(e) = failed {
-                return Err(e);
-            }
-        }
-        other => return Err(format!("unsupported archive type: .{other}")),
-    }
-
-    Ok(walk_files(dest).len())
-}
-
-fn walk_files(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
-    for e in entries.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            out.extend(walk_files(&p));
-        } else {
-            out.push(p);
-        }
-    }
-    out
-}
-
-fn collect_paks(dir: &Path) -> Vec<PathBuf> {
-    walk_files(dir)
-        .into_iter()
-        .filter(|p| {
-            p.extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| e.eq_ignore_ascii_case("pak"))
-        })
-        .collect()
-}
-
-// ── Install ───────────────────────────────────────────────────────────────
-
-/// Copy the merged pak into `~mods`, keeping a timestamped copy of whatever it
-/// replaces. Overwriting silently is how a user loses the setup that worked.
-fn install_to_mods(merged: &Path, paks_dir: &Path) -> Result<PathBuf, String> {
-    let mods = paks_dir.join("~mods");
-    std::fs::create_dir_all(&mods).map_err(|e| format!("{}: {e}", mods.display()))?;
-    let target = mods.join("SicarioCombine_P.pak");
-    if target.exists() {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let backup = mods.join(format!("SicarioCombine_P.pak.{stamp}.bak"));
-        std::fs::rename(&target, &backup).map_err(|e| format!("backup: {e}"))?;
-    }
-    std::fs::copy(merged, &target).map_err(|e| format!("copy: {e}"))?;
-    Ok(target)
 }

@@ -8,9 +8,12 @@ stream it already contains. `modman-gui` puts the merge in a window, with no
 browser engine and no terminal.
 
 ### Added
-- `modman-gui`, a native desktop front end. Drop `.rar`, `.7z`, `.zip` or `.pak`
-  files on the window and it extracts them in-process, merges, shows the
-  conflict report and installs into `~mods` with a timestamped backup. Archive
+- `modman-gui`, a native desktop front end with a tab per job: merge mods,
+  build presets, game audio, translations, pak files, scan and inspect. Drop
+  `.rar`, `.7z`, `.zip` or `.pak` files on the window and it extracts them
+  in-process, merges, shows the conflict report and installs into `~mods` with a
+  timestamped backup. Every tab calls the same `modman-core` function the CLI
+  calls, so the window cannot grow behaviour the command line does not have. Archive
   support is pure Rust (`rars` Apache-2.0, `sevenz-rust` MIT, `zip` MIT), so
   nothing has to be installed on the machine, on Windows or anywhere else. egui,
   no browser engine, 10.7 MB binary. Release builds ship the GUI for Linux and
@@ -49,6 +52,15 @@ browser engine and no terminal.
 - Failed merges produce a **copyable diagnostics block**: the page, browser, mod
   list with sizes, game pak, number of reads and where it stopped. Reports built
   from that are actionable without a follow-up round trip.
+- The browser page patches translations too: pick a `.locres`, download it as
+  CSV, translate the CSV, then patch the strings back and download the
+  `.locres`. Namespaces, hashes and order stay intact. Both directions were
+  checked against the CLI on the retail English table (10,553 entries, 322
+  namespaces): the patched file and the exported CSV are byte-identical to
+  `modman locres patch` and `modman locres read`. Audio extraction and pak
+  unpacking stay desktop jobs, because the game pak is read through
+  `File.slice` and writing a tree of files would run into wasm32's memory
+  ceiling.
 
 ### Changed
 - Pass-through files (textures, meshes, audio: everything that cannot be
