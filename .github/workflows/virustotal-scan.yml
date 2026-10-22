@@ -16,7 +16,8 @@ on:
       artifact-pattern:
         description: >-
           Artifact name pattern to download and scan. Each artifact must contain
-          a `modman` or `modman.exe`; files are renamed after their artifact so
+          a `modman`, `modman.exe`, `modman-gui` or `modman-gui.exe`; files are
+          renamed after their artifact so
           the six platform builds do not collide.
         type: string
         default: ""
@@ -64,7 +65,8 @@ jobs:
                   ;;
               esac
               cp "$f" "scan/$name"
-            done < <(find download -type f \( -name modman -o -name 'modman.exe' \))
+            done < <(find download -type f \( -name modman -o -name 'modman.exe' \
+                                          -o -name 'modman-gui' -o -name 'modman-gui.exe' \) )
           fi
           if [ -n "${{ inputs.paths }}" ]; then
             shopt -s nullglob
