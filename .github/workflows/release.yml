@@ -231,14 +231,12 @@ jobs:
           cp bin-stage/modman-macos-arm64/modman release-assets/modman-macos-arm64
           cp bin-stage/modman-macos-amd64/modman release-assets/modman-macos-amd64
           cp bin-stage/modman-single-file/modman-merge.html release-assets/modman-merge.html
-          # GUI: bare binaries on Linux/Windows, a signed .app bundle in a zip
-          # on macOS (the archive is what consumers double-click there).
+          # GUI: Linux and Windows only. macOS users run the Windows build
+          # under Whisky/CrossOver; see the note in rust-build.yml.
           cp bin-stage/modman-gui-linux-amd64/modman-gui-linux-amd64 release-assets/modman-gui-linux-amd64
           cp bin-stage/modman-gui-linux-arm64/modman-gui-linux-arm64 release-assets/modman-gui-linux-arm64
           cp bin-stage/modman-gui-win-amd64.exe/modman-gui-win-amd64.exe release-assets/modman-gui-win-amd64.exe
           cp bin-stage/modman-gui-win-arm64.exe/modman-gui-win-arm64.exe release-assets/modman-gui-win-arm64.exe
-          cp bin-stage/modman-gui-macos-arm64.zip/modman-gui-macos-arm64.zip release-assets/modman-gui-macos-arm64.zip
-          cp bin-stage/modman-gui-macos-amd64.zip/modman-gui-macos-amd64.zip release-assets/modman-gui-macos-amd64.zip
           chmod +x release-assets/modman-linux-* release-assets/modman-macos-* \
                    release-assets/modman-gui-linux-*
 
@@ -255,8 +253,7 @@ jobs:
             release-assets/modman-macos-amd64 release-assets/modman-macos-arm64 \
             release-assets/modman-win-amd64.exe release-assets/modman-win-arm64.exe \
             release-assets/modman-gui-linux-amd64 release-assets/modman-gui-linux-arm64 \
-            release-assets/modman-gui-win-amd64.exe release-assets/modman-gui-win-arm64.exe \
-            release-assets/modman-gui-macos-arm64.zip release-assets/modman-gui-macos-amd64.zip
+            release-assets/modman-gui-win-amd64.exe release-assets/modman-gui-win-arm64.exe
 
       # Checksums for every published artifact so a locally downloaded build
       # can be verified with `sha256sum -c SHA256SUMS` before running it.
