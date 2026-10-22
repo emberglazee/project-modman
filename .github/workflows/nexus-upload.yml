@@ -14,6 +14,10 @@ name: Nexus upload
 #     chmod +x'd before zipping, and the docs still tell Linux users to run
 #     `chmod +x modman` because some extractors drop the mode.
 #
+# The GUI has its own two Linux entries (amd64 is the page's primary file). A
+# version whose GUI zips were uploaded by hand can skip those legs with
+# `gui: false`, otherwise each run adds a second identical version to them.
+#
 # Windows is deliberately NOT published here. Nexus quarantines every unsigned
 # Windows executable we upload, so a Windows entry would sit un-downloadable
 # next to a stale version. The mod description already links to the GitHub
@@ -29,16 +33,26 @@ on:
         description: "Version being published, without the leading v (e.g. 0.4.5)"
         type: string
         required: true
+      gui:
+        description: "Also publish the two Linux GUI entries (set false when they were uploaded by hand)"
+        type: boolean
+        default: true
   workflow_dispatch:
     inputs:
       version:
         description: "Version to publish, without the leading v (e.g. 0.4.5)"
         type: string
         required: true
+      gui:
+        description: "Also publish the two Linux GUI entries (set false when they were uploaded by hand)"
+        type: boolean
+        default: true
 
 jobs:
   upload:
     name: Nexus (${{ matrix.label }})
+    # GUI legs are skipped when that version's GUI zips were uploaded by hand.
+    if: ${{ !matrix.gui || inputs.gui }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -75,6 +89,28 @@ jobs:
               modman for Apple Silicon, with the MIT license. The binary is
               unsigned, so the first run needs a right-click then Open, or
               xattr -d com.apple.quarantine modman.
+          - label: "GUI Linux amd64"
+            asset: modman-gui-linux-amd64
+            bin: modman-gui
+            file_id: 8209770
+            gui: true
+            readme: packaging/gui-readme.txt
+            description: >-
+              The desktop app for x86-64 Linux, with the MIT license: drop mod
+              archives on the window and it merges, reports and installs them.
+              Needs a desktop with OpenGL 3.3. Extract, chmod +x modman-gui,
+              then run it.
+          - label: "GUI Linux arm64"
+            asset: modman-gui-linux-arm64
+            bin: modman-gui
+            file_id: 8209767
+            gui: true
+            readme: packaging/gui-readme.txt
+            description: >-
+              The desktop app for 64-bit ARM Linux, with the MIT license: drop
+              mod archives on the window and it merges, reports and installs
+              them. Needs a desktop with OpenGL 3.3. Extract, chmod +x
+              modman-gui, then run it.
     steps:
       - uses: actions/checkout@v6
         with:
@@ -97,6 +133,9 @@ jobs:
           cp "assets/${{ matrix.asset }}" "pkg/${{ matrix.bin }}"
           chmod +x "pkg/${{ matrix.bin }}"
           cp LICENSE pkg/LICENSE
+          if [ -n "${{ matrix.readme }}" ]; then
+            cp "${{ matrix.readme }}" pkg/README.txt
+          fi
           (cd pkg && zip -q -r "../${{ matrix.asset }}.zip" .)
           echo "file=${{ matrix.asset }}.zip" >> "$GITHUB_OUTPUT"
           ls -l "${{ matrix.asset }}.zip"
