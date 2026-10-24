@@ -206,12 +206,19 @@ impl eframe::App for App {
             self.auto_merge = false;
             if !self.merge.inputs.is_empty() {
                 if let Some(paks) = self.paks_dir.clone() {
-                    let job = Job::Merge {
-                        base_pak: paks.join("pakchunk0-WindowsNoEditor.pak"),
-                        inputs: self.merge.inputs.clone(),
-                        out_dir: self.merge.out_dir.clone(),
-                    };
-                    self.start(job, true);
+                    match modman_core::game::find_base_pak(&paks) {
+                        Some(base_pak) => {
+                            let job = Job::Merge {
+                                base_pak,
+                                inputs: self.merge.inputs.clone(),
+                                out_dir: self.merge.out_dir.clone(),
+                            };
+                            self.start(job, true);
+                        }
+                        None => self
+                            .log
+                            .push_str(&format!("No game pak found in {}\n", paks.display())),
+                    }
                 }
             }
         }
@@ -333,7 +340,7 @@ impl eframe::App for App {
         let game_paks = self.paks_dir.clone();
         let game_pak = game_paks
             .as_ref()
-            .map(|p| p.join("pakchunk0-WindowsNoEditor.pak"));
+            .and_then(|p| modman_core::game::find_base_pak(p));
         let mut job: Option<(Job, bool)> = None;
 
         egui::CentralPanel::default().show(root, |ui| match self.tab {

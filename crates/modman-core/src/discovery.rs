@@ -1,14 +1,15 @@
 //! Mod discovery from installed paks — mirrors the C# `MergeLoader` scan.
 //!
 //! Walks a Paks directory recursively for `*.pak` files (excluding the base
-//! game paks and the `~sicario` output dir), reads each archive's index, and
-//! collects the embedded Sicario components:
+//! game pak at the root and the `~sicario` output dir), reads each archive's
+//! index, and collects the embedded Sicario components:
 //!   - presets: a record whose path contains `sicario` and ends with `.dtp`
 //!   - build requests: a record under `_meta/sicario/` ending with `.json`
 //!
 //! C# precedence: a pak carrying a preset contributes ONLY the preset (its
 //! request, if any, is skipped).
 
+use crate::game::is_base_pak_name;
 use crate::manifest::{parse_meta_request_json, parse_preset_json, WingmanMod};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -46,19 +47,29 @@ impl ScanReport {
     }
 }
 
-/// True for the base game paks, which are skipped. The C# loader only skips
-/// `ProjectWingman-WindowsNoEditor` by name; we additionally skip
-/// `pakchunk0-WindowsNoEditor` since 2.x ships it as the base pak.
-fn is_base_pak(name: &str) -> bool {
-    let n = name.to_ascii_lowercase();
-    n == "projectwingman-windowsnoeditor.pak" || n == "pakchunk0-windowsnoeditor.pak"
+/// True when `path` is the game's own base archive.
+///
+/// The base pak lives at the Paks root. Name alone is not enough: a renamed
+/// base archive slipped past the old exact-name check and was scanned as a
+/// 17 GB "mod". Location alone is not enough either: users also drop paks at
+/// the root, and those are mods. The legacy base name, however, is never a
+/// mod wherever it sits.
+fn is_base_pak_path(root: &Path, path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    if name.eq_ignore_ascii_case("ProjectWingman-WindowsNoEditor.pak") {
+        return true;
+    }
+    path.parent() == Some(root) && is_base_pak_name(name)
 }
 
 /// Scan a Paks directory (recursively) for Sicario merge components.
 pub fn scan_paks_dir(paks_dir: &Path) -> ScanReport {
     let mut report = ScanReport::default();
     let mut paks: Vec<PathBuf> = Vec::new();
-    collect_paks(paks_dir, &mut paks);
+    collect_paks(paks_dir, paks_dir, &mut paks);
     paks.sort();
     for pak in paks {
         report.paks_scanned += 1;
@@ -69,7 +80,7 @@ pub fn scan_paks_dir(paks_dir: &Path) -> ScanReport {
     report
 }
 
-fn collect_paks(dir: &Path, out: &mut Vec<PathBuf>) {
+fn collect_paks(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -80,19 +91,14 @@ fn collect_paks(dir: &Path, out: &mut Vec<PathBuf>) {
             if path.file_name().and_then(|n| n.to_str()) == Some("~sicario") {
                 continue;
             }
-            collect_paks(&path, out);
+            collect_paks(root, &path, out);
         } else if path
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("pak"))
+            && !is_base_pak_path(root, &path)
         {
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if !is_base_pak(&name) {
-                out.push(path);
-            }
+            out.push(path);
         }
     }
 }
@@ -147,4 +153,52 @@ fn scan_single_pak(pak_path: &Path, report: &mut ScanReport) -> Result<(), Strin
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("modman-discovery-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn base_pak_is_excluded_by_location_and_name() {
+        let root = scratch("base-location");
+        let mods = root.join("~mods");
+        std::fs::create_dir_all(&mods).unwrap();
+
+        // The 2.x base pak and any renamed chunk at the Paks root.
+        assert!(is_base_pak_path(
+            &root,
+            &root.join("pakchunk0-WindowsNoEditor.pak")
+        ));
+        assert!(is_base_pak_path(&root, &root.join("pakchunk7-Windows.pak")));
+
+        // Root-level user paks are mods, even when named like a chunk.
+        assert!(!is_base_pak_path(&root, &root.join("MyMod_P.pak")));
+        assert!(!is_base_pak_path(
+            &root,
+            &root.join("pakchunk9-WindowsNoEditor_P.pak")
+        ));
+
+        // A chunk-named pak inside a mod folder is not the base pak.
+        assert!(!is_base_pak_path(
+            &root,
+            &mods.join("pakchunk1-WindowsNoEditor.pak")
+        ));
+
+        // The legacy base name is never a mod, wherever it sits.
+        assert!(is_base_pak_path(
+            &root,
+            &mods.join("ProjectWingman-WindowsNoEditor.pak")
+        ));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

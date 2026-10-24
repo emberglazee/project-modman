@@ -1,5 +1,25 @@
 # Changelog
 
+## [v0.5.1] — 2026-10-25
+
+**The game pak is found by what it is, not by one hard-coded filename.** PW 2.x
+renamed its archive from `ProjectWingman-WindowsNoEditor.pak` to
+`pakchunk0-WindowsNoEditor.pak`. The old merger broke on that rename; modman
+must not repeat the mistake if it happens again.
+
+### Fixed
+- Base-pak discovery now lives in one place, `core::game::find_base_pak`: it
+  prefers `pakchunk0-WindowsNoEditor.pak`, falls back to the 1.x
+  `ProjectWingman-WindowsNoEditor.pak`, then takes the lowest-numbered
+  top-level `pakchunk*.pak`. Every caller uses it: `build`, `combine`, `audio`,
+  `locres extract`, the GUI merge tab, and engine-version detection. Missing
+  archives are reported with the directory that was searched, not a path that
+  never existed.
+- Mod discovery excludes the base archive by location and name together: any
+  top-level `pakchunk*-Windows*.pak` is the game, while root-level user paks
+  and everything in `~mods` stay mods. A renamed base pak can no longer be
+  scanned as a 17 GB "mod".
+
 ## [v0.5.0] — 2026-10-22
 
 **Game audio comes out as Ogg, and the desktop app arrives.** `modman audio`

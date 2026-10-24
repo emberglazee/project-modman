@@ -96,11 +96,12 @@ impl MergeTab {
         });
 
         ui.add_space(8.0);
-        let can = !self.inputs.is_empty() && game_paks.is_some();
+        let base_pak = game_paks.and_then(modman_core::game::find_base_pak);
+        let can = !self.inputs.is_empty() && base_pak.is_some();
         if ui.add_enabled(can, egui::Button::new("Merge")).clicked() {
-            if let Some(paks) = game_paks {
+            if let Some(base_pak) = base_pak {
                 job = Some(Job::Merge {
-                    base_pak: paks.join("pakchunk0-WindowsNoEditor.pak"),
+                    base_pak,
                     inputs: self.inputs.clone(),
                     out_dir: self.out_dir.clone(),
                 });

@@ -23,8 +23,10 @@ on the command line are the same code over different byte sources.
 The same rule applies one level up: `combine::run_to_dir` owns the filesystem
 side of a merge (open the game pak, open each mod, merge, stage, pack), and the
 CLI and the GUI both call it. Game detection lives in `core::game` for the same
-reason. A frontend decides *what* to merge and *how to show it*; it does not get
-its own copy of the merge.
+reason, together with base-pak resolution: `find_base_pak` tries the 2.x name,
+the 1.x name, then the lowest-numbered top-level `pakchunk*.pak`, and every
+caller resolves instead of joining a fixed filename. A frontend decides *what*
+to merge and *how to show it*; it does not get its own copy of the merge.
 
 The CLI's package name is `modman` while the directory is `modman-cli`, so
 build it with `cargo build -p modman`.
@@ -34,7 +36,8 @@ build it with `cargo build -p modman`.
 | Module | Responsibility |
 |---|---|
 | `manifest.rs` | The Sicario data model: `WingmanMod`, `WingmanPreset`, `MetaRequest`, patch sets and patches. Lenient parsing (case-insensitive keys, comments, trailing commas, explicit nulls). |
-| `discovery.rs` | `scan_paks_dir`: find embedded `_meta` build records and `.dtp` presets inside a Paks directory. |
+| `discovery.rs` | `scan_paks_dir`: find embedded `_meta` build records and `.dtp` presets inside a Paks directory. The base pak is excluded by location and name, not by one exact filename. |
+| `game.rs` | Install detection plus base-pak resolution: `find_base_pak` prefers the 2.x name, falls back to the 1.x name and then to the lowest-numbered top-level `pakchunk*.pak`, so a renamed game archive does not break every command. |
 | `components.rs` | Turn a scan plus loose files into ordered `MergeComponent`s (embedded presets, loose presets, embedded requests, custom skins) and drain them into mods in priority order. |
 | `templating/` | `mod.rs` is the renderer (`{{ vars.x \| filter }}`, the Sicario filter set). `apply.rs` is the per-mod pipeline that renders vars, gates `enableSteps`, and rewrites patch values, templates and windows. |
 | `fragment.rs` | Parses a patch template (`datatable:['Row'].{'Prop'}`) into fragments. |

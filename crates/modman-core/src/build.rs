@@ -269,7 +269,9 @@ pub fn build_pak(
         asset_targets.extend(m.asset_patches.keys().cloned());
     }
 
-    let main_pak_path = game_paks.join("pakchunk0-WindowsNoEditor.pak");
+    let main_pak_path = crate::game::find_base_pak(game_paks).ok_or_else(|| {
+        BuildError::new(1, format!("Game pak not found in: {}", game_paks.display()))
+    })?;
     let pak = modman_pak::PakArchive::open(&main_pak_path)
         .map_err(|e| BuildError::new(1, format!("Pak error: {e}")))?;
     let all_files = pak.files();

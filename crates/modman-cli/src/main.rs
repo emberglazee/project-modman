@@ -585,12 +585,15 @@ fn main() {
                     let _ = std::fs::remove_dir_all(&work_dir);
                     std::fs::create_dir_all(&work_dir).unwrap();
 
-                    // Find the main game pak
-                    let main_pak_path = game_paks.join("pakchunk0-WindowsNoEditor.pak");
-                    if !main_pak_path.exists() {
-                        eprintln!("Game pak not found at: {}", main_pak_path.display());
-                        std::process::exit(1);
-                    }
+                    // Find the main game pak. 2.x renamed the archive, so resolve
+                    // it by the known names and a chunk-pak fallback.
+                    let main_pak_path = match modman_core::game::find_base_pak(&game_paks) {
+                        Some(p) => p,
+                        None => {
+                            eprintln!("Game pak not found in: {}", game_paks.display());
+                            std::process::exit(1);
+                        }
+                    };
 
                     // Engine preview: locate + parse each target asset from the game pak with
                     // the verified DataTable walker. Patch application and merge are the next
@@ -919,7 +922,14 @@ fn main() {
                                     );
                                     std::process::exit(1);
                                 });
-                            resolve_paks_dir(&game).join("pakchunk0-WindowsNoEditor.pak")
+                            let paks_dir = resolve_paks_dir(&game);
+                            match modman_core::game::find_base_pak(&paks_dir) {
+                                Some(p) => p,
+                                None => {
+                                    eprintln!("Error: no game pak found in {}", paks_dir.display());
+                                    std::process::exit(1);
+                                }
+                            }
                         }
                     };
                     let archive = modman_pak::PakArchive::open(&pak_path).unwrap_or_else(|e| {
@@ -1383,10 +1393,8 @@ fn audio_pak_paths(paths: &[String]) -> Result<Vec<std::path::PathBuf>, String> 
     if paks.is_empty() {
         let game = modman_core::game::detect_game()
             .ok_or("no pak given, and no Project Wingman install was found")?;
-        let base = game.paks_path.join("pakchunk0-WindowsNoEditor.pak");
-        if !base.is_file() {
-            return Err(format!("expected the game pak at {}", base.display()));
-        }
+        let base = modman_core::game::find_base_pak(&game.paks_path)
+            .ok_or_else(|| format!("no game pak found in {}", game.paks_path.display()))?;
         paks.push(base);
     }
     paks.sort();
@@ -1579,7 +1587,8 @@ fn cmd_combine(
 
     // Shared with the browser page and the GUI: one implementation of the
     // filesystem side of a merge, so the frontends cannot drift apart.
-    let base = game_paks.join("pakchunk0-WindowsNoEditor.pak");
+    let base = modman_core::game::find_base_pak(game_paks)
+        .ok_or_else(|| format!("no game pak found in {}", game_paks.display()))?;
     let run = modman_core::combine::run_to_dir(
         &base,
         &paks,
