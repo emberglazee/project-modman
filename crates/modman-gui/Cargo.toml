@@ -14,12 +14,18 @@ modman-pak = { path = "../modman-pak" }
 # egui rather than a webview: no browser engine, no system toolkit, one binary.
 # x11 + wayland are not implied once default-features is off: without them
 # winit has no platform and fails with "platform ... not supported".
-eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
-rfd = "0.17"
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+rfd = "0.17.2"
 
 # Archive extraction, all pure Rust so nothing has to be installed or bundled.
-zip = { version = "9", default-features = false, features = ["deflate"] }
-sevenz-rust = "0.6"
+zip = { version = "9.1.2", default-features = false, features = ["deflate"] }
+# sevenz-rust was abandoned (repository deleted, RUSTSEC-2026-0246) and every
+# version of it, 0.6.1 included, writes outside the extraction directory when an
+# archive entry is named `../x` or an absolute path (RUSTSEC-2026-0245). Its
+# maintained successor validates entry names before every write, and errors out
+# instead of extracting. Decode only: no encoder, no bzip2/ppmd/aes, which is
+# exactly what the old crate handled.
+sevenz-rust2 = { version = "0.24", default-features = false, features = ["util"] }
 # Reading only: we never write or decrypt RAR archives, and the writer plus
 # crypto paths cost several MB of binary.
-rars = { version = "0.11", default-features = false }
+rars = { version = "0.12.2", default-features = false }

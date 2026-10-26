@@ -37,7 +37,7 @@ pub fn extract_archive(path: &Path, dest: &Path) -> Result<usize, String> {
             archive.extract(dest).map_err(|e| e.to_string())?;
         }
         "7z" => {
-            sevenz_rust::decompress_file(path, dest).map_err(|e| e.to_string())?;
+            sevenz_rust2::decompress_file(path, dest).map_err(|e| e.to_string())?;
         }
         "rar" => {
             let archive = rars::ArchiveReader::read_path(path).map_err(|e| e.to_string())?;

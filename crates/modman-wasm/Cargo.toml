@@ -12,9 +12,9 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 modman-core = { path = "../modman-core" }
 repak = { git = "https://github.com/trumank/repak", tag = "v0.2.3" }
-wasm-bindgen = "0.2"
-js-sys = "0.3"
-serde_json = "1"
+wasm-bindgen = "0.2.129"
+js-sys = "0.3.106"
+serde_json = "1.0.154"
 
 # Rust's wasm32 target emits bulk-memory, sign-extension and non-trapping float
 # conversions by default now. wasm-pack's bundled wasm-opt validates with a

@@ -1,5 +1,46 @@
 # Changelog
 
+## [v0.5.2] — 2026-10-26
+
+**A mod archive can no longer write outside the folder it is extracted into.**
+The 7z library modman shipped with is abandoned, and every version of it, 0.6.1
+included, joins each entry name onto the extraction path without checking it, so
+an entry called `../x` or an absolute path lands wherever the archive's author
+chose.
+
+### Security
+- 7z extraction moved to [`sevenz-rust2`](https://crates.io/crates/sevenz-rust2),
+  the maintained successor. It validates every entry name before writing and
+  refuses the archive when one escapes, with `unsafe entry path escapes
+  destination: <path>`. The crate it replaces carries two advisories:
+  RUSTSEC-2026-0245 (CWE-23/CWE-36, no patched version exists) and
+  RUSTSEC-2026-0246 (unmaintained, the repository is deleted).
+- Proven on a real archive instead of taken from the advisory text: a 7z whose
+  entry is an absolute path used to be extracted, and the file appeared outside
+  the destination while the window reported only "no .pak files inside the
+  archive". It is now refused with nothing written. The zip branch already used
+  the `zip` crate's own path check and RAR already validated each name, so 7z was
+  the only hole.
+- Extraction is otherwise unchanged: all 18 `.7z` archives in the mod corpus
+  unpack to the same file list and the same SHA-256 per file under both
+  libraries, and a merged pak built from a 7z mod keeps its hash.
+
+### Changed
+- Archive and support crates are current: `zip` 9.0.5 to 9.1.2, `rars` 0.11 to
+  0.12.2 (still read-only, the writer stays out of the binary), `typed-path` 0.13
+  through `repak`, and exact pins for `eframe`, `rfd` and the wasm crates in
+  place of loose ranges. `cargo audit` reports no vulnerabilities and no
+  unmaintained crates; the single remaining warning is a yanked
+  `clipboard-win 5.4.1`, Windows clipboard support inside egui, which is not a
+  security issue.
+- Only the desktop app changes: Linux amd64 goes from 10.89 MB in 0.5.1 to
+  11.13 MB, the cost of the path-checking extractor. The command line build is
+  unchanged, because every bumped crate is reachable only from the GUI.
+- No measurable speed change. Paired, interleaved runs of 0.5.1 against this
+  build on the GUI merge path stay inside the run-to-run spread of a merge that
+  packs on six threads. Peak memory is identical at 250 MB (six paks), 213 MB (a
+  20 MB zip) and 280 MB (the 29-pak set), and the merged output is byte-identical.
+
 ## [v0.5.1] — 2026-10-25
 
 **The game pak is found by what it is, not by one hard-coded filename.** PW 2.x
