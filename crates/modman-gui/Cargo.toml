@@ -25,7 +25,7 @@ zip = { version = "9.1.2", default-features = false, features = ["deflate"] }
 # maintained successor validates entry names before every write, and errors out
 # instead of extracting. Decode only: no encoder, no bzip2/ppmd/aes, which is
 # exactly what the old crate handled.
-sevenz-rust2 = { version = "0.24", default-features = false, features = ["util"] }
+sevenz-rust2 = { version = "0.24.1", default-features = false, features = ["util"] }
 # Reading only: we never write or decrypt RAR archives, and the writer plus
 # crypto paths cost several MB of binary.
 rars = { version = "0.12.2", default-features = false }
