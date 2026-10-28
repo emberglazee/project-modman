@@ -220,7 +220,7 @@ fn write_manifest(report: &AudioReport, path: &Path) -> Result<(), ApplyError> {
         text.push_str(&format!(
             "{},{},{},{}\n",
             quote(&e.asset),
-            quote(&e.output.to_string_lossy()),
+            quote(&e.output.to_string_lossy().replace('\\', "/")),
             e.bytes,
             e.streamed
         ));
@@ -243,14 +243,14 @@ mod tests {
         assert_eq!(
             output_path("../../../ProjectWingman/Content/Assets/Audio/Dialog/C_M6/x.uasset")
                 .unwrap()
-                .to_string_lossy(),
-            "Assets/Audio/Dialog/C_M6/x.ogg"
+                .as_path(),
+            Path::new("Assets/Audio/Dialog/C_M6/x.ogg")
         );
         assert_eq!(
             output_path("ProjectWingman/Content/Assets/Audio/Music/08_-_Conquest.uasset")
                 .unwrap()
-                .to_string_lossy(),
-            "Assets/Audio/Music/08_-_Conquest.ogg"
+                .as_path(),
+            Path::new("Assets/Audio/Music/08_-_Conquest.ogg")
         );
         assert!(output_path("ProjectWingman/Content/../../../../evil.uasset").is_none());
     }
