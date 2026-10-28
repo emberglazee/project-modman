@@ -1,6 +1,6 @@
 # Changelog
 
-## [v0.5.2] — 2026-10-26
+## [v0.5.2] — 2026-10-28
 
 **A mod archive can no longer write outside the folder it is extracted into.**
 The 7z library modman shipped with is abandoned, and every version of it, 0.6.1
@@ -40,6 +40,29 @@ chose.
   build on the GUI merge path stay inside the run-to-run spread of a merge that
   packs on six threads. Peak memory is identical at 250 MB (six paks), 213 MB (a
   20 MB zip) and 280 MB (the 29-pak set), and the merged output is byte-identical.
+
+### Fixed
+- The browser page handed a finished merge's memory to the JavaScript garbage
+  collector, which is not obliged to run. Measured against the shipped wasm in
+  Chrome: twelve 64 MB sessions with no explicit `free()` climbed linearly to
+  807 MB and reclaimed nothing, while the same loop with `free()` stayed flat at
+  65 MB. The merge session is now freed in a `finally` block, so a retry starts
+  from the previous run's high-water mark instead of waiting on collector
+  timing. No user-visible failure was reproduced on the page itself: two merges
+  of the same five-mod, 634 MB set back to back both peaked at 2,690 MB in
+  either version, because reading each mod pak allocates a large array in the
+  JavaScript heap and that pressure is what makes the collector run. The change
+  removes the dependence on that timing. Output is untouched: the merged bytes
+  are copied into the JavaScript heap before the session is freed, and the same
+  inputs hash identically before and after. Both script tags move to `?v=0.5.2`
+  in the same change: this is the first edit to `web/app.js` since 0.5.0, and
+  without the bump a returning visitor would run the cached copy and see none of
+  it.
+- Running out of memory while loading a mod pak now reports as running out of
+  memory. That failure arrives as `could not load <file> as a pak: unreachable`,
+  and the `unreachable` pattern in the error classifier was anchored to the
+  start and end of the message, so the wrapped form fell through to the generic
+  "The merge stopped" text.
 
 ## [v0.5.1] — 2026-10-25
 

@@ -54,6 +54,11 @@ the merged result at the same time. Measured with aircraft addons of about
 140 MB each: four merged fine, six ran out. Treat roughly 500 MB of mod paks as
 a safe batch and expect trouble past 800 MB.
 
+A finished merge releases its working memory before the next one starts, so
+pressing Merge again with one more mod does not stack two runs. A tab that has
+already run out of memory is a different case: it keeps the memory it grew to,
+and the file list can only grow, so reload before trying a smaller set.
+
 In order of effort:
 
 1. Merge in batches of three or four, then add the merged file to the next

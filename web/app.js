@@ -119,7 +119,12 @@ function classifyError(e) {
   const raw = String((e && e.message) || e || '');
   const run = lastRun || {};
 
-  if (/out of memory|allocation failed|Cannot enlarge memory|memory access out of bounds|Array buffer allocation|^unreachable$|RuntimeError/i.test(raw)) {
+  // "unreachable" is unanchored on purpose: an allocation failure while mods
+  // are being loaded arrives wrapped as "could not load X as a pak: unreachable",
+  // and an anchored match sent that to the generic handler. Rust aborts on
+  // allocation error without unwinding, so this trap is what an exhausted wasm
+  // heap looks like from JS.
+  if (/out of memory|allocation failed|Cannot enlarge memory|memory access out of bounds|Array buffer allocation|unreachable|RuntimeError/i.test(raw)) {
     return {
       title: 'Not enough memory for this mod set',
       body:
@@ -255,6 +260,7 @@ async function runMerge() {
   lastRun = newRunRecord();
   let bytesRead = 0;
   let loadingMod = null;
+  let session = null;
 
   try {
     const totalModBytes = modFiles.reduce((a, f) => a + f.size, 0);
@@ -266,7 +272,7 @@ async function runMerge() {
       );
     }
 
-    const session = new wasm_bindgen.MergeSession();
+    session = new wasm_bindgen.MergeSession();
     const sorted = [...modFiles].sort((a, b) => a.name.localeCompare(b.name));
     for (const f of sorted) {
       loadingMod = f.name;
@@ -334,6 +340,24 @@ async function runMerge() {
     if (loadingMod) lastRun.error = `while loading ${loadingMod}: ${lastRun.error}`;
     showError(e);
   } finally {
+    // Free the session explicitly. It holds every mod pak and every game-pak
+    // range it was handed, and nothing else points at it once this run ends.
+    // wasm-bindgen does register a FinalizationRegistry, but that only fires
+    // when the JS collector runs, and wasm growth alone does not make it:
+    // measured, twelve 64 MB sessions without this line climb linearly to
+    // 807 MB and reclaim nothing, while the same loop with free() stays flat at
+    // 65 MB. On this page the collector happens to keep up, because reading each
+    // mod pak allocates a large array in the JS heap; freeing makes the release
+    // deterministic instead of dependent on that pressure.
+    if (session) {
+      // A trap while freeing must not hide the error the user is being shown.
+      try {
+        session.free();
+      } catch (e) {
+        console.error('modman: freeing the merge session failed:', e);
+      }
+      session = null;
+    }
     mergeBtn.disabled = false;
     refreshUi();
   }
@@ -498,12 +522,17 @@ if (locresToCsvBtn) {
 if (locresPatchBtn) {
   locresPatchBtn.addEventListener('click', () => {
     if (!wasmReady || !locresBytes || !locresCsvText) return;
+    let patched = null;
     try {
-      const patched = wasm_bindgen.locres_patch(locresBytes, locresCsvText);
+      patched = wasm_bindgen.locres_patch(locresBytes, locresCsvText);
       downloadBytes(patched.bytes, locresName);
       locresSay(`Patched ${patched.patched} string(s); downloaded ${locresName}.`);
     } catch (e) {
       locresSay(`Error: ${e}`);
+    } finally {
+      // Same reason as the merge session: a wasm object is not reclaimed until
+      // the collector happens to run, and this one holds the whole table.
+      if (patched) patched.free();
     }
   });
 }
