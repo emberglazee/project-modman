@@ -417,7 +417,7 @@ fn run(job: Job, send: &dyn Fn(Msg)) -> Result<JobOutput, String> {
 
 /// Removes per-job extraction directories when the job ends, success or error.
 #[derive(Default)]
-struct TempDirs(Vec<PathBuf>);
+pub(crate) struct TempDirs(Vec<PathBuf>);
 
 impl TempDirs {
     fn push(&mut self, dir: PathBuf) {
@@ -435,13 +435,14 @@ impl Drop for TempDirs {
 
 static EXTRACT_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// The merge job: extract archives, then run the shared combine.
-fn merge(
-    base_pak: &std::path::Path,
+/// Turn display inputs into the pak list the merger applies. Paks are pushed in
+/// the order given; an archive is extracted and its paks are sorted by path
+/// before being appended, so one archive is deterministic while archive blocks
+/// keep the user's order. The `TempDirs` must outlive every read of the result.
+pub(crate) fn prepare_inputs(
     inputs: &[PathBuf],
-    out_dir: &std::path::Path,
-    send: &dyn Fn(Msg),
-) -> Result<JobOutput, String> {
+    mut on_stage: impl FnMut(&str),
+) -> Result<(Vec<PathBuf>, TempDirs), String> {
     let mut paks: Vec<PathBuf> = Vec::new();
     let mut temps = TempDirs::default();
     let total = inputs.len();
@@ -450,10 +451,7 @@ fn merge(
             .file_name()
             .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_else(|| path.display().to_string());
-        send(Msg::Stage(format!(
-            "Preparing {label} ({}/{total})…",
-            i + 1
-        )));
+        on_stage(&format!("Preparing {label} ({}/{total})…", i + 1));
         if path
             .extension()
             .and_then(|e| e.to_str())
@@ -473,16 +471,27 @@ fn merge(
         temps.push(dest.clone());
         match crate::archive::extract_archive(path, &dest) {
             Ok(_) => {
-                let found = crate::archive::collect_paks(&dest);
+                let mut found = crate::archive::collect_paks(&dest);
                 if found.is_empty() {
                     return Err(format!("{label}: no .pak files inside the archive"));
                 }
+                found.sort();
                 paks.extend(found);
             }
             Err(e) => return Err(format!("{label}: {e}")),
         }
     }
-    paks.sort();
+    Ok((paks, temps))
+}
+
+/// The merge job: extract archives, then run the shared combine.
+fn merge(
+    base_pak: &std::path::Path,
+    inputs: &[PathBuf],
+    out_dir: &std::path::Path,
+    send: &dyn Fn(Msg),
+) -> Result<JobOutput, String> {
+    let (paks, _temps) = prepare_inputs(inputs, |text| send(Msg::Stage(text.to_string())))?;
     if paks.is_empty() {
         return Err("no mod paks to merge".to_string());
     }
@@ -519,4 +528,23 @@ fn merge(
         ),
         run.output.clone(),
     ))
+}
+
+#[cfg(test)]
+mod prepare_tests {
+    use super::*;
+
+    #[test]
+    fn pak_inputs_keep_their_order() {
+        let dir = std::env::temp_dir().join(format!("modman-gui-order-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.pak");
+        let b = dir.join("b.pak");
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
+        let (paks, temps) = prepare_inputs(&[b.clone(), a.clone()], |_| {}).unwrap();
+        assert_eq!(paks, vec![b, a]);
+        drop(temps);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
