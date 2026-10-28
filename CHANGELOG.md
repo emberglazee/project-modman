@@ -99,7 +99,7 @@ removed `modman pack --compression` flag.
   bumps above, which is why that bullet could still call the audit clean.
 - What it was costing: the CLI goes from 3,287,448 bytes to 2,168,560, the wasm
   module from 674,866 to 376,173, and the single-file page from 949,904 to
-  568,236 (wasm and page from the deployed Pages artifacts; the CLI figure is
+  568,250 (wasm and page from the deployed Pages artifacts; the CLI figure is
   a local release build). The compression removal accounted for most of it
   (2,153,168 / 373,235 / 549,539); the order controls and probe add the rest.
   Output is unchanged: the 29-pak set hashes `555dca0d12d2ac24…` at
