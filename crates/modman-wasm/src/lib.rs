@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::rc::Rc;
 
-use modman_core::combine::{combine_sources, PakSource};
+use modman_core::combine::{combine_sources_with, CombineOptions, PakSource};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
@@ -176,11 +176,35 @@ fn map_err(e: repak::Error) -> MergeErr {
     MergeErr::Other(e.to_string())
 }
 
+/// Validate that `order` is a permutation of `0..len` and return it as usize.
+fn validate_order(len: usize, order: &[u32]) -> Result<Vec<usize>, String> {
+    if order.len() != len {
+        return Err(format!(
+            "order must list {len} entries, got {}",
+            order.len()
+        ));
+    }
+    let mut seen = vec![false; len];
+    let mut out = Vec::with_capacity(len);
+    for &i in order {
+        let i = i as usize;
+        if i >= len {
+            return Err(format!("order entry {i} is out of range"));
+        }
+        if std::mem::replace(&mut seen[i], true) {
+            return Err(format!("order entry {i} appears twice"));
+        }
+        out.push(i);
+    }
+    Ok(out)
+}
+
 /// A merge session: add mod paks, provide game-pak byte ranges, step until
 /// done. All state lives here between JS calls.
 #[wasm_bindgen]
 pub struct MergeSession {
     mods: Vec<(String, Rc<Vec<u8>>)>,
+    order: Option<Vec<usize>>,
     game_size: u64,
     regions: RegionMap,
     missing: MissingSlot,
@@ -192,6 +216,7 @@ impl MergeSession {
     pub fn new() -> MergeSession {
         MergeSession {
             mods: Vec::new(),
+            order: None,
             game_size: 0,
             regions: Rc::new(RefCell::new(Vec::new())),
             missing: Rc::new(RefCell::new(None)),
@@ -203,6 +228,15 @@ impl MergeSession {
         // Rc so the per-merge readers share these bytes instead of cloning
         // them (halves peak memory for big mod paks in the browser).
         self.mods.push((label, Rc::new(bytes)));
+        self.order = None;
+    }
+
+    /// Set the order the mods are applied in. `order` must be a permutation
+    /// of `0..mods.len()`; the bytes stay put, so reordering re-reads nothing.
+    pub fn set_order(&mut self, order: Vec<u32>) -> Result<(), JsValue> {
+        let order = validate_order(self.mods.len(), &order).map_err(|e| JsValue::from_str(&e))?;
+        self.order = Some(order);
+        Ok(())
     }
 
     /// Tell the session how big the game pak is (bytes).
@@ -223,15 +257,27 @@ impl MergeSession {
     ///   {status:"need", offset, length}  — fetch that range and provide() it
     ///   {status:"done", pak: Uint8Array, report: <json string>}
     pub fn step(&mut self) -> Result<JsValue, JsValue> {
+        self.step_with(true)
+    }
+
+    /// Run (or resume) the conflict probe. Same need/provide protocol as
+    /// `step`, but the done object carries only `report`; no pak is written.
+    pub fn probe_step(&mut self) -> Result<JsValue, JsValue> {
+        self.step_with(false)
+    }
+
+    fn step_with(&mut self, pack: bool) -> Result<JsValue, JsValue> {
         *self.missing.borrow_mut() = None;
         // A panic here aborts the wasm module (panic = abort); the hook records
         // the message for `last_panic()`, which JS reads after the trap.
-        match self.try_merge() {
+        match self.try_merge(pack) {
             Ok((pak, report)) => {
                 let obj = js_sys::Object::new();
                 let _ = js_sys::Reflect::set(&obj, &"status".into(), &"done".into());
-                let arr = js_sys::Uint8Array::from(&pak[..]);
-                let _ = js_sys::Reflect::set(&obj, &"pak".into(), &arr.into());
+                if let Some(pak) = pak {
+                    let arr = js_sys::Uint8Array::from(&pak[..]);
+                    let _ = js_sys::Reflect::set(&obj, &"pak".into(), &arr.into());
+                }
                 let _ = js_sys::Reflect::set(&obj, &"report".into(), &report.into());
                 Ok(obj.into())
             }
@@ -251,7 +297,11 @@ impl MergeSession {
         }
     }
 
-    fn try_merge(&self) -> Result<(Vec<u8>, String), MergeErr> {
+    fn try_merge(&self, pack: bool) -> Result<(Option<Vec<u8>>, String), MergeErr> {
+        if self.mods.is_empty() {
+            return Err(MergeErr::Other("no mod paks given".to_string()));
+        }
+
         // 1. The game pak over the sparse regions.
         let sparse = SparseReader {
             size: self.game_size,
@@ -275,10 +325,15 @@ impl MergeSession {
             files: base_pak.files(),
         };
 
-        // 2. The mod paks (whole files in memory).
+        // 2. The mod paks (whole files in memory), in the caller's order.
+        let indices: Vec<usize> = self
+            .order
+            .clone()
+            .unwrap_or_else(|| (0..self.mods.len()).collect());
         let mut mod_cells: Vec<RefCell<SparseReader>> = Vec::new();
         let mut mod_paks: Vec<repak::PakReader> = Vec::new();
-        for (_, bytes) in &self.mods {
+        for &index in &indices {
+            let (_, bytes) = &self.mods[index];
             let cell = RefCell::new(SparseReader::whole(bytes.clone()));
             let pak = {
                 let mut b = cell.borrow_mut();
@@ -297,10 +352,15 @@ impl MergeSession {
             })
             .collect();
         let src_refs: Vec<&dyn PakSource> = mod_srcs.iter().map(|s| s as &dyn PakSource).collect();
-        let labels: Vec<String> = self.mods.iter().map(|(l, _)| l.clone()).collect();
+        let labels: Vec<String> = indices.iter().map(|&i| self.mods[i].0.clone()).collect();
 
-        // 3. The shared combine.
-        let mut outcome = match combine_sources(&base, &src_refs, &labels) {
+        // 3. The shared combine. A probe records pass-through files without
+        // reading their bytes; a merge needs them for the output pak.
+        let options = CombineOptions {
+            datatables_only: false,
+            defer_passthrough: !pack,
+        };
+        let mut outcome = match combine_sources_with(&base, &src_refs, &labels, &options) {
             Ok(o) => o,
             Err(e) => {
                 if let Some((s, e2)) = *self.missing.borrow() {
@@ -310,10 +370,29 @@ impl MergeSession {
             }
         };
 
-        // 4. Write the merged V3 pak (same params as the CLI). The file map is
+        // 4. Report JSON, before the pak writer consumes the file map.
+        let file_count = outcome.files.len() + outcome.pass_through.len();
+        if !pack && file_count == 0 {
+            return Err(MergeErr::Other(
+                "nothing to combine (no conflicting overrides found)".to_string(),
+            ));
+        }
+        let report = serde_json::json!({
+            "merged": outcome.merged,
+            "files": file_count,
+            "order": labels,
+            "conflicts": outcome.field_conflicts,
+            "passThroughConflicts": outcome.pass_through_conflicts,
+            "warnings": outcome.warnings,
+            "skipped": outcome.skipped,
+        });
+        if !pack {
+            return Ok((None, report.to_string()));
+        }
+
+        // 5. Write the merged V3 pak (same params as the CLI). The file map is
         // consumed, not cloned: the browser holds every byte in wasm memory, so
         // a second copy of the output is fatal on the same sets.
-        let file_count = outcome.files.len();
         let mut cursor = Cursor::new(Vec::new());
         {
             let mut writer = repak::PakBuilder::new().writer(
@@ -328,18 +407,7 @@ impl MergeSession {
             }
             writer.write_index().map_err(map_err)?;
         }
-
-        // 5. Report JSON.
-        let report = serde_json::json!({
-            "merged": outcome.merged,
-            "files": file_count,
-            "order": labels,
-            "conflicts": outcome.field_conflicts,
-            "passThroughConflicts": outcome.pass_through_conflicts,
-            "warnings": outcome.warnings,
-            "skipped": outcome.skipped,
-        });
-        Ok((cursor.into_inner(), report.to_string()))
+        Ok((Some(cursor.into_inner()), report.to_string()))
     }
 }
 
@@ -408,4 +476,17 @@ pub fn locres_diff(a: &[u8], b: &[u8]) -> Result<String, JsValue> {
         diff.added.len(),
         diff.removed.len()
     ))
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::validate_order;
+
+    #[test]
+    fn order_must_be_a_permutation() {
+        assert_eq!(validate_order(3, &[2, 0, 1]).unwrap(), vec![2, 0, 1]);
+        assert!(validate_order(3, &[0, 1]).is_err(), "wrong length");
+        assert!(validate_order(3, &[0, 1, 3]).is_err(), "out of range");
+        assert!(validate_order(3, &[0, 1, 1]).is_err(), "duplicate");
+    }
 }
