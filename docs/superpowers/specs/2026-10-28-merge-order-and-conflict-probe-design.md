@@ -48,9 +48,13 @@ The frontends are the only place the order is lost.
   order.
 - The desktop app sorts in `MergeTab::add_paths`. The browser sorts in
   `renderModList` and again before calling `session.add_mod`.
-- `CombineOutcome` already carries `field_conflicts`, `pass_through_conflicts`,
-  `warnings` and `skipped`; `CombineRun` adds `output`, `merged`, `files` and
-  `order`.
+- `CombineOutcome` carries the output file map, `merged`, `field_conflicts`,
+  `pass_through_conflicts`, `pass_through`, `warnings` and `skipped`;
+  `CombineRun` adds the output path, the total file count and `order`.
+- The desktop merge job sorts the extracted pak list at `job.rs:485`
+  (`paks.sort()`), so that sort must be removed or block order is lost.
+- `collect_paks` walks an extraction directory in filesystem order, which is
+  not stable across runs or platforms.
 - `run_to_dir` reads pass-through files while writing the staging tree. The
   conflict computation itself does not need their bytes.
 
@@ -138,7 +142,11 @@ pub inputs: Vec<PathBuf>,          // display order
 pub direction: PriorityDirection,  // LaterWins default
 ```
 
-`add_paths` appends instead of sorting. Duplicate paths are still skipped.
+`add_paths` appends instead of sorting. Duplicate paths are still skipped. The
+"Add a folder" button sorts its collected pak list before appending, because a
+bulk folder import has no user order and `read_dir` order is not stable;
+individual files and drops append in the order given.
+
 Pure helpers cover the logic and are unit tested:
 
 ```rust
@@ -185,8 +193,9 @@ directories are removed when the thread finishes, success or error.
 
 The probe result appears in its own panel: counts for field conflicts,
 pass-through conflicts and warnings, each expandable into the list. Errors and
-"nothing to combine" appear there too and never block merging. The merge report
-continues to go to the log.
+"nothing to combine" appear there too and never block merging. A "Check now"
+button clears the debounce and starts a probe immediately; it is disabled while
+one is running. The merge report continues to go to the log.
 
 `job.rs` factors the current archive extraction out of the merge job into a
 helper that both the merge job and the probe thread call:
@@ -196,6 +205,13 @@ pub(crate) fn prepare_inputs(
     inputs: &[PathBuf],
 ) -> Result<(Vec<PathBuf>, TempDirs), String>;
 ```
+
+`prepare_inputs` walks the inputs in the given order. A pak is pushed as it is;
+an archive is extracted and its paks are sorted by path before being appended,
+so one archive is deterministic while archives keep their block order. The
+helper does not call `paks.sort()` globally; the existing sort at `job.rs:485`
+is deleted. The 29-pak gate passes its paks alphabetically, so its hash is
+unchanged.
 
 The merge job keeps its existing `TempDirs` lifetime and cleanup. The probe
 thread owns its own `TempDirs` for the duration of the probe.
@@ -222,20 +238,27 @@ Both flags are test hooks, not the main interface.
 `web/app.js`:
 
 - `modFiles` is the display order. The two `localeCompare` sorts are removed.
-- `direction` is `'last'` or `'first'`; `applicationIndices()` returns
-  `[0..n]` or its reverse.
+- Each file entry carries a stable session index, assigned when the session is
+  built. The session's `mods` vector stays in that canonical order and never
+  moves when the list is reordered; `applicationIndices()` returns the
+  canonical indices in application order, always a permutation of `0..n`.
+  Adding or removing a mod rebuilds the session and reassigns the indices.
+- `direction` is `'last'` or `'first'`; the application order is the display
+  order or its reverse.
 - One `MergeSession` is kept per mod-set and game-pak pair. It is created on the
-  first probe or merge, holds the mod bytes read once in display order, and
+  first probe or merge, holds the mod bytes read once in canonical order, and
   reuses the cached base-pak regions. Adding or removing a mod, or changing the
   game pak, invalidates the session. After a successful merge the session is
   freed, matching today's memory behavior; the next probe or merge reads the
   files again.
 - Before every probe or merge the page calls `session.set_order(...)` with the
-  application indices.
+  canonical application indices.
 - A reorder or a switch change sets a 400 ms debounce. The probe loop calls
   `probe_step`, answers `need` with `readRange` plus `provide`, and stops on a
   stale generation. It yields once before the first step so the "Checking"
   state can paint.
+- A "Check conflicts" button clears the debounce and runs a probe immediately;
+  it is disabled while one is in flight.
 - `showReport` renders the order section from `modFiles` and marks skipped
   entries from `report.skipped`, rather than rendering `report.order` directly.
 - The probe panel is separate from the merge result panel.
@@ -252,8 +275,11 @@ impl MergeSession {
 `set_order` validates a permutation of `0..mods.len()` and stores it.
 `probe_step` uses the same need/provide protocol as `step`, but returns
 `{status:"done", report}` with no `pak` field and never packs an output. The
-shared internals become `try_merge(&self, pack: bool)`; `step` passes true,
-`probe_step` false. A native unit test covers permutation validation.
+shared internals become
+`try_merge(&self, pack: bool) -> Result<(Option<Vec<u8>>, String), MergeErr>`;
+`step` passes true and returns an internal error if the pak is absent,
+`probe_step` passes false and returns the report alone. A native unit test
+covers permutation validation.
 
 The single-file build inlines the new HTML, CSS and JavaScript through the
 existing builder; no change is needed there. The script tags stay at
@@ -267,6 +293,12 @@ path and source index without reading their bytes, because `defer_passthrough`
 is set. It writes no output staging tree and no output pak; in the desktop
 app, archive extraction for a probe uses temporary directories that are removed
 when the probe ends.
+
+Both `probe` and `run_to_dir` receive the same `CombineOptions` from a caller
+(the desktop app passes `CombineOptions::default()` to both) and both force
+`defer_passthrough: true`. `probe` returns the same "nothing to combine" error
+as `run_to_dir` when the outcome has no datatables and no pass-through entries;
+the panel renders that message as a state.
 
 A probe is therefore not free on a large set. It is the datatable half of a
 merge without the multi-gigabyte write. The 400 ms debounce exists so a burst of
@@ -291,6 +323,8 @@ stale and waits for the current step to return.
 - An empty input list disables the merge and clears the probe panel.
 - An archive that fails to extract fails the probe with that archive's message;
   it does not abort a later merge attempt, which retries extraction.
+- A probe of a set with no datatables and no pass-through entries returns the
+  merge's "nothing to combine" error and shows it in the panel.
 - A stale probe result is dropped silently.
 - A session with a changed mod set is rebuilt; old bytes are released.
 
@@ -302,6 +336,8 @@ stale and waits for the current step to return.
   order: `merged`, `files`, `order`, all three conflict lists and `skipped`.
 - Reversing the pak list changes the winning value for a known conflicting
   fixture, and the report's `order` reflects the reversed input.
+- A set with no overrides returns the same "nothing to combine" error as
+  `run_to_dir`.
 - `probe` creates no output directory contents and no pak.
 - Corpus tests stay gated on the corpus directory, as the repository requires.
 
@@ -313,13 +349,17 @@ stale and waits for the current step to return.
   prints a report with the expected winner; `--first-wins` flips the winner in
   the same probe.
 - A headless merge with an explicit input order writes a pak whose conflicting
-  field has the expected winner. The 29-pak merge hash gate stays.
+  field has the expected winner. The 29-pak merge hash gate stays; its inputs
+  are already alphabetical, so removing the sort must not change it.
+- Folder import sorts the collected paks; two archives keep their blocks in
+  input order, with each archive's paks alphabetical inside the block.
 
 ### Browser
 
 - Playwright adds two conflicting paks, waits for the probe, asserts the
   conflict winner, clicks the first row's down button, waits for the new probe,
-  and asserts the winner flipped.
+  and asserts the winner flipped. A reorder after the session exists must move
+  the same mods, proving the canonical index mapping.
 - The same test with the direction switch flipped asserts the same flip without
   moving a row.
 - A merge after the reorder reports the same winner as the probe, and the
@@ -350,7 +390,10 @@ rendered strings.
   line that the two interfaces no longer sort; update the intro sentence so the
   minor number covers the new interface feature as well as the removed
   compression flag. The script tags stay `?v=0.6.0`.
-- No version bump beyond 0.6.0. The user publishes.
+- The manifest stays at 0.5.1. The release dispatch's `bump=minor` computes
+  0.6.0 and writes `Cargo.toml` and `Cargo.lock`; local feature builds report
+  0.5.1, while the release build runs from the bump commit and reports 0.6.0.
+  No separate version commit is part of this feature.
 
 ## Acceptance criteria
 
@@ -361,7 +404,8 @@ rendered strings.
 - [ ] The direction switch is honored by both the probe and the merge, and the
       winning end is marked.
 - [ ] The probe runs automatically after a reorder, is debounced, can be
-      refreshed manually, and never blocks the Merge button in the desktop app.
+      refreshed with a button in both interfaces, and never blocks the Merge
+      button in the desktop app.
 - [ ] The probe writes no output pak and no staging tree.
 - [ ] The probe report and the merge report agree for the same order.
 - [ ] The CLI behavior and report are unchanged.
