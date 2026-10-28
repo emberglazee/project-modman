@@ -79,6 +79,6 @@ it lists the mods, their sizes, the game pak, and where the merge stopped.
 ## What this page cannot do
 
 - It cannot merge mods that ship Sicario metadata (`.dtm` files or presets
-  inside a pak). Those need `modman build`, which is in the desktop build.
+  inside a pak). Those need the desktop **Build presets** tab or `modman build`.
 - It cannot edit `.locres` translations. That is `modman locres`.
 - It does not read or write anything outside your browser tab.

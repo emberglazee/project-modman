@@ -102,6 +102,10 @@ place via the browser's file API and never leaves your machine. The page makes z
 network requests after it loads, and the offline `modman-merge.html` works with no
 network at all.
 
+**Can the web page apply Sicario `.dtm`/`.dtp` metadata?**
+No. The page is the no-metadata `combine` path; for original Sicario mods use
+the desktop **Build presets** tab or `modman build` / `preset-pack`.
+
 **Why is it so large for a web page?**
 The merge engine is embedded (~0.57 MB single file). It runs the same code as the
 command-line tool, byte for byte, which the project's test suite checks.

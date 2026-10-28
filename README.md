@@ -106,6 +106,8 @@ WebAssembly, running entirely in your browser:
   (a few MB of it, even from a ~16 GB file), and the page makes zero network requests
   after loading.
 - Shows the same merge report (order + conflicts) with a friendly UI.
+- This is the no-metadata `combine` path: it does not apply `.dtm`/`.dtp`
+  patches. For those, use the desktop **Build presets** tab or `modman build`.
 
 ### Desktop app — no terminal needed
 
@@ -120,6 +122,8 @@ finds the game on its own, and asks if it cannot.
   installs the result into `~mods`, keeping a timestamped backup of whatever it
   replaced.
 - **Build presets**: build a Sicario preset set into one `SicarioMerge_P.pak`.
+  Accepts `.dtp`, `.dtm` and `.json` presets plus folders; this is the metadata
+  path. **Merge mods** is the metadata-less `combine` and does not apply patches.
 - **Game audio**: list the sound assets in a pak and extract them as `.ogg`.
 - **Translations**: pull a `.locres` out of the game pak, export it as CSV, and
   patch a translated CSV back in.

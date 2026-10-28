@@ -130,3 +130,28 @@ impl BuildTab {
         job
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_paths_accepts_presets_and_rejects_paks() {
+        let mut tab = BuildTab::new(PathBuf::new());
+        tab.add_paths([
+            PathBuf::from("b.dtm"),
+            PathBuf::from("a.dtp"),
+            PathBuf::from("c.json"),
+            PathBuf::from("d.pak"),
+            PathBuf::from("e.zip"),
+        ]);
+        assert_eq!(
+            tab.inputs,
+            vec![
+                PathBuf::from("a.dtp"),
+                PathBuf::from("b.dtm"),
+                PathBuf::from("c.json"),
+            ]
+        );
+    }
+}
