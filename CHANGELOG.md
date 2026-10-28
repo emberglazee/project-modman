@@ -21,8 +21,8 @@ minor number is for the removed `modman pack --compression` flag.
   above the output folder, exit 0. One helper now refuses absolute paths, drive
   or stream colons and any `..` component at unpack, combine, build, audio
   extraction and the GUI pak tab, with `unsafe entry path escapes destination:
-  <path>`. All 136 paks on this machine pass it, and the 29-pak merge still
-  hashes `555dca0d…` at 4,607,949,935 bytes.
+  <path>`. All 136 mod paks scanned on this machine pass it, and the 29-pak
+  merge still hashes `555dca0d…` at 4,607,949,935 bytes.
 - Extraction is otherwise unchanged: the nine `.7z` archives (18 files) unpack
   to the same file list and per-file SHA-256 under both libraries, and a merged
   pak from a 7z mod keeps its hash.
