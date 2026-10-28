@@ -13,5 +13,5 @@ repository.workspace = true
 # 134 paks measured (the 17.5 GB base archive, 133 mod paks from the corpus, the
 # aralanche set and ~mods) report no compression. A compressed entry still fails
 # cleanly with repak's "compression" error, exactly as Oodle already does.
-repak = { git = "https://github.com/trumank/repak", tag = "v0.2.3", default-features = false, features = ["encryption"] }
-thiserror = "2"
+repak = { workspace = true }
+thiserror = { workspace = true }

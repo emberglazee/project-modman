@@ -447,7 +447,7 @@ fn main() {
                         match modman_core::build::build_pak(
                             &game_paks,
                             &mod_refs,
-                            &extra_files,
+                            extra_files,
                             &out_dir,
                             "SicarioMerge_P.pak",
                             &mut |stage| {
@@ -811,7 +811,7 @@ fn main() {
                 match modman_core::build::build_pak(
                     &game_paks,
                     &mod_refs,
-                    &extra,
+                    extra,
                     &out_root,
                     &pak_name,
                     &mut |_| {},

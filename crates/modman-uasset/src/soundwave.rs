@@ -278,13 +278,13 @@ mod tests {
     /// is not in the repo, so this skips when the sample directory is absent.
     #[test]
     fn streamed_track_reassembles_from_uexp_plus_ubulk() {
-        let Some(dir) = std::env::var_os("HOME").map(|h| {
-            PathBuf::from(h)
-                .join(".hermes/cache/scratch/pw-audio-sample")
-                .join("PW_-_Mission_1.uexp")
-        }) else {
+        // The streamed sample is external; point MODMAN_TEST_CORPUS at the
+        // folder that holds pw-audio-sample/ to run this test.
+        let Some(root) = std::env::var_os("MODMAN_TEST_CORPUS").map(PathBuf::from) else {
+            eprintln!("skipping: MODMAN_TEST_CORPUS is not set");
             return;
         };
+        let dir = root.join("pw-audio-sample/PW_-_Mission_1.uexp");
         if !dir.is_file() {
             eprintln!("skipping: sample corpus not present");
             return;

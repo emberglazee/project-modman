@@ -365,10 +365,15 @@ fn apply_edits(buf: &mut Vec<u8>, base: usize, edits: &[PlannedEdit]) -> Result<
 
 /// 32 uppercase hex chars (FText key format); random like the C#'s GUIDs.
 fn gen_text_key() -> String {
-    let mut seed = std::time::SystemTime::now()
+    // Two calls in one clock tick (Windows ticks are coarse) must not produce
+    // the same "random" key, so a process-wide counter is mixed into the seed.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0x9E37_79B9_7F4A_7C15);
+    let mut seed = nanos ^ seq.wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let mut out = String::with_capacity(32);
     for _ in 0..16 {
         seed ^= seed << 13;

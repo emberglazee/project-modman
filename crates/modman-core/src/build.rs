@@ -230,7 +230,7 @@ pub fn run_to_dir(
     let (asset_targets, files, field_conflicts) = build_pak(
         &game_paks,
         &mod_refs,
-        &extra_files,
+        extra_files,
         out_dir,
         "SicarioMerge_P.pak",
         &mut on_stage,
@@ -252,7 +252,7 @@ pub fn run_to_dir(
 pub fn build_pak(
     game_paks: &Path,
     mods: &[&crate::manifest::WingmanMod],
-    extra_files: &[(String, Vec<u8>)],
+    extra_files: Vec<(String, Vec<u8>)>,
     out_dir: &Path,
     pak_name: &str,
     on_stage: &mut impl FnMut(BuildStage<'_>),
@@ -370,7 +370,7 @@ pub fn build_pak(
     }
 
     for (key, bytes) in extra_files {
-        files.insert(key.clone(), bytes.clone());
+        files.insert(key, bytes);
     }
 
     on_stage(BuildStage::Writing { files: files.len() });

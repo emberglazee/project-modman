@@ -54,6 +54,11 @@ pub fn merge_datatable_overrides(
     let (vua, vue) = vanilla;
     let vdt = DataTable::walk_bytes(vua, vue).map_err(|e| ApplyError::Asset(e.to_string()))?;
     let vcount = vdt.names.len();
+    // Row lookup is by name, once per row instead of once per mod row.
+    let mut vanilla_rows = std::collections::HashMap::with_capacity(vdt.rows.len());
+    for r in &vdt.rows {
+        vanilla_rows.entry(r.name.as_str()).or_insert(r);
+    }
     let mut warnings = Vec::new();
     let mut conflicts: Vec<String> = Vec::new();
 
@@ -174,7 +179,7 @@ pub fn merge_datatable_overrides(
         let map = &maps[m];
         for r in &dt.rows {
             let src = &ue[r.start..r.end];
-            let vanilla_row = vdt.rows.iter().find(|vr| vr.name == r.name);
+            let vanilla_row = vanilla_rows.get(r.name.as_str()).copied();
             // A row needs processing when its bytes differ OR when any of its
             // refs point at imports the mod replaced (bytes identical, but
             // the refs must be remapped — the F59-skins case at row level).
@@ -1680,12 +1685,27 @@ pub fn combine_sources_with(
         .iter()
         .map(|r| effective_path(&base_mount, &r.replace('\\', "/")))
         .collect();
+    // Exact hits are the common case; the suffix fallback exists for nested
+    // mounts. Index both so a 50k-path pak table is not scanned per mod asset.
+    let mut base_exact: std::collections::HashMap<&str, &String> =
+        std::collections::HashMap::with_capacity(base_files.len());
+    let mut base_by_name: std::collections::HashMap<&str, Vec<&String>> =
+        std::collections::HashMap::new();
+    for f in &base_files {
+        base_exact.entry(f.as_str()).or_insert(f);
+        if let Some(leaf) = f.rsplit('/').next() {
+            base_by_name.entry(leaf).or_default().push(f);
+        }
+    }
     let base_find = |name: &str| -> Option<String> {
-        base_files
-            .iter()
-            .find(|f| f.as_str() == name)
-            .or_else(|| base_files.iter().find(|f| f.ends_with(name)))
-            .cloned()
+        if let Some(hit) = base_exact.get(name) {
+            return Some((*hit).clone());
+        }
+        let leaf = name.rsplit('/').next().unwrap_or(name);
+        base_by_name
+            .get(leaf)
+            .and_then(|candidates| candidates.iter().find(|f| f.ends_with(name)))
+            .map(|f| (*f).clone())
     };
 
     struct Override {
