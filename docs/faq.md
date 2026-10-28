@@ -47,9 +47,19 @@ you. If two mods genuinely both need to change the same map, that's a manual
 decision, not something any tool can automate.
 
 **Two mods changed the same stat. Who wins?**
-The later mod in the merge order (the order is shown in the report; paks sort by
-filename). The conflict is listed with both values so you can see it happened. If you
-want the other one to win, rename the paks to change the order.
+The later mod in the application order, which the report shows. In the browser and
+the desktop app the list is the order and the Priority switch chooses which end
+wins; drag a row or use its arrows. The command line sorts paks by filename, so
+renaming changes priority only there. The conflict is listed with both values so
+you can see it happened. If you want the other one to win, move the entry in the
+app or rename the paks for the CLI.
+
+**What does the conflict check do?**
+It runs the merge's conflict pass without writing a pak: the same engine reads the
+datatables, reports field conflicts, files that cannot be combined, and warnings,
+and leaves the output folder alone. It runs after a reorder with a short debounce,
+or when you press Check now. It is not free, because it reads every datatable, so
+a large set takes a moment.
 
 **How do I know a merge worked?**
 The report shows the order, every conflict and every warning. The tool's outputs are
@@ -93,7 +103,7 @@ network requests after it loads, and the offline `modman-merge.html` works with 
 network at all.
 
 **Why is it so large for a web page?**
-The merge engine is embedded (~0.55 MB single file). It runs the same code as the
+The merge engine is embedded (~0.57 MB single file). It runs the same code as the
 command-line tool, byte for byte, which the project's test suite checks.
 
 ## Credits

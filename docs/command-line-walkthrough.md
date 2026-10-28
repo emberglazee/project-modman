@@ -104,6 +104,11 @@ merged field by field instead of one silently replacing the other.
 If it prints warnings about files it could not combine, those files are kept
 from the last mod in the order. The report names them.
 
+The command line applies paks in filename order. To change which mod wins, rename
+the paks. The browser page and the desktop app use the list order instead, with a
+switch for which end wins and a conflict check; see
+[Choosing the merge order](../README.md#choosing-the-merge-order).
+
 ## 6. Install the result
 
 1. Copy `SicarioCombine_P.pak` into your `~mods` folder.

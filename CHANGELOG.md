@@ -5,7 +5,21 @@
 **A mod archive can no longer write outside its extraction folder.** Every
 version of the 7z library modman shipped, 0.6.1 included, joins entry names
 unchecked, so `../x` or an absolute path lands wherever the author chose. The
-minor number is for the removed `modman pack --compression` flag.
+minor number covers the new ordered merge list and conflict check, and the
+removed `modman pack --compression` flag.
+
+### Added
+- The desktop app and the browser page merge in the order you arrange. Drag a
+  row or use its up and down buttons; new files append. A Priority switch
+  chooses whether the later or the earlier entry wins a conflict, and the
+  winning end is marked. The command line keeps its alphabetical order.
+- Both interfaces probe conflicts before a merge: after a reorder with a 400 ms
+  debounce, or from **Check now**. The probe runs the same combine engine with
+  pass-through bytes deferred, so it reports the exact field conflicts, files
+  that cannot be combined, and warnings without writing a pak. The desktop
+  probe runs on its own thread and leaves Merge enabled.
+- `core::combine::probe` and `CombineReport` expose the same findings to any
+  frontend; `probe` and `run_to_dir` share one open-and-combine path.
 
 ### Security
 - 7z extraction moved to [`sevenz-rust2`](https://crates.io/crates/sevenz-rust2),
@@ -49,7 +63,9 @@ minor number is for the removed `modman pack --compression` flag.
 - The dependency update leaves the CLI alone at 3,287,448 bytes, because every
   bumped crate is GUI-only. The Linux amd64 GUI goes from 10,892,688 bytes to
   11,096,536 (10.89 to 11.10 MB), the cost of the newer extractors; clipboard
-  support later costs 1,197,816 bytes (see Fixed).
+  support later costs 1,197,816 bytes (see Fixed), and the order controls and
+  probe thread add 105,336 bytes. The final 0.6.0 Linux amd64 GUI is 11,957,328
+  (11.96 MB) and the CLI is 2,168,560.
 - No measurable speed change. Paired, interleaved runs of 0.5.1 against the
   dependency-update build stay inside the run-to-run spread of a six-thread
   packer (load ~9): CPU moved by -1.4% on six paks, +9.7% on a 20 MB zip and
@@ -63,6 +79,9 @@ minor number is for the removed `modman pack --compression` flag.
   mix a process counter into the clock seed, so keys made in one tick differ.
 - Cargo: `repak` and `thiserror` are workspace dependencies, `rust-version` is
   `"1.88"`, and the streamed-audio test reads `MODMAN_TEST_CORPUS`.
+- The browser and desktop app no longer sort their inputs: the list is the
+  application order, and the CLI remains the only frontend that sorts by full
+  path.
 
 ### Removed
 - `modman pack --compression zlib|gzip|zstd|lz4` is gone with the decompression
@@ -78,9 +97,11 @@ minor number is for the removed `modman pack --compression` flag.
   `[patch]` cannot bridge `^0.13` to 0.14. `zstd-safe` also carried ten unsound
   warnings. The advisories were assigned on 2026-10-26, the same day as the
   bumps above, which is why that bullet could still call the audit clean.
-- What it was costing: the CLI goes from 3,287,448 bytes to 2,153,168, the wasm
-  module from 674,866 to 373,235, and the single-file page from 949,904 to
-  549,539. Output is unchanged: the 29-pak set hashes `555dca0d12d2ac24…` at
+- What it was costing: the CLI goes from 3,287,448 bytes to 2,168,560, the wasm
+  module from 674,866 to 376,653, and the single-file page from 949,904 to
+  568,876 (local release builds). The compression removal accounted for most of
+  it (2,153,168 / 373,235 / 549,539); the order controls and probe add the rest.
+  Output is unchanged: the 29-pak set hashes `555dca0d12d2ac24…` at
   4,607,949,935 bytes on both builds, a GUI run of the Nimble NPCs `.7z` still
   produces `534a8e19…` (77,324 bytes), and the wasm merge of four mod paks
   matches the CLI byte for byte (`101ce6d6…`, 88,193 bytes).
@@ -134,8 +155,8 @@ minor number is for the removed `modman pack --compression` flag.
   build's scratch directory is per process and removed after packing.
 - Docs: the PowerShell and `.bat` examples use `${env:ProgramFiles(x86)}` and
   `%ProgramFiles(x86)%`; the FAQ no longer claims the tool is read-only (the
-  GUI install button writes to `~mods`), its single-file size is 0.55 MB, the
-  README GUI size is 11.9 MB, and ARCHITECTURE matches `pack`'s V11 default.
+  GUI install button writes to `~mods`), its single-file size is 0.57 MB, the
+  README GUI size is 12.0 MB, and ARCHITECTURE matches `pack`'s V11 default.
 
 ## [v0.5.1] — 2026-10-25
 

@@ -27,8 +27,10 @@ Inside the extracted folder you want files ending in `_P.pak`.
 Drag them onto the first box, or use **Choose files…**. The list shows what you
 added and how big each one is.
 
-Order matters only for conflicts: later filenames win. The report tells you
-exactly which field was set by which mod, so you do not have to guess.
+Order matters only for conflicts, and the list is the order. Drag a row or use
+its arrows; the Priority switch chooses whether later or earlier entries win.
+The conflict check runs after a reorder, or when you press **Check now**, and
+names the winner in every conflict line. The report repeats it after the merge.
 
 ## Step 3: point at your game pak
 

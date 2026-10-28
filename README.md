@@ -11,6 +11,7 @@
 - [Merging mods without metadata (`combine`)](#merging-mods-without-metadata-combine)
   - [Web UI — no install needed](#web-ui--no-install-needed)
   - [Desktop app — no terminal needed](#desktop-app--no-terminal-needed)
+  - [Choosing the merge order](#choosing-the-merge-order)
   - [Downloading & first run](#downloading--first-run)
 - [Translation mods (`.locres`)](#translation-mods-locres)
 - [Game audio (`.ogg`)](#game-audio-ogg)
@@ -109,13 +110,15 @@ WebAssembly, running entirely in your browser:
 ### Desktop app — no terminal needed
 
 `modman-gui` is the same engine in a native window: egui, no browser engine, one
-binary at about 11.9 MB. Download it from the release page and double-click; it
+binary at about 12.0 MB. Download it from the release page and double-click; it
 finds the game on its own, and asks if it cannot.
 
 - **Merge mods**: drag `.rar`, `.7z`, `.zip` or `.pak` files onto the window.
   Archives are extracted in-process (`rars`, `sevenz-rust2`, `zip`, all pure Rust,
-  so nothing has to be installed) and merged; one button then installs the result
-  into `~mods`, keeping a timestamped backup of whatever it replaced.
+  so nothing has to be installed) and merged; reorder the list to choose which
+  mod wins, and the conflict check updates as you move entries. One button then
+  installs the result into `~mods`, keeping a timestamped backup of whatever it
+  replaced.
 - **Build presets**: build a Sicario preset set into one `SicarioMerge_P.pak`.
 - **Game audio**: list the sound assets in a pak and extract them as `.ogg`.
 - **Translations**: pull a `.locres` out of the game pak, export it as CSV, and
@@ -127,6 +130,24 @@ finds the game on its own, and asks if it cannot.
 Every tab calls the same `modman-core` function the command line calls, so the
 window cannot produce output the CLI would not. Linux and Windows builds; on
 macOS run the Windows build under Whisky or CrossOver.
+
+### Choosing the merge order
+
+In the browser and the desktop app, the list is the order. Drag a row, or use
+its up and down buttons; new files append. The Priority switch decides which
+end wins a conflict: **Later in the list wins** applies the list top to bottom,
+and **Earlier in the list wins** applies it bottom to top. The winning end is
+marked.
+
+Both interfaces check conflicts after a reorder, with a 400 ms debounce, and a
+**Check now** button forces the check. It runs the same merge engine and reports
+the exact field conflicts, the files that cannot be combined, and warnings,
+without writing a pak. The check is not free because it reads every datatable;
+on a 29-pak set it takes a moment, and the desktop app keeps the Merge button
+available while it runs.
+
+The command line still sorts paks alphabetically by full path, so renaming is
+only needed there.
 
 ### Downloading & first run
 
