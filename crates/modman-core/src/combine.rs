@@ -1993,19 +1993,15 @@ impl PakSource for FilePakSource<'_> {
     }
 }
 
-/// Run a combine over paks on disk and write `SicarioCombine_P.pak` into
-/// `out_dir`. Returns the report; the caller decides how to show it.
-pub fn run_to_dir(
+/// Open the base and mod paks in order, run the shared combine, and return the
+/// outcome with the archives still open so the caller can stream pass-through
+/// files. `probe` uses the same path with a no-op stage callback.
+fn open_and_combine(
     base_pak: &Path,
     mod_paks: &[PathBuf],
-    out_dir: &Path,
     options: &CombineOptions,
     mut on_stage: impl FnMut(&CombineStage),
-) -> Result<CombineRun, String> {
-    if mod_paks.is_empty() {
-        return Err("no mod paks given".to_string());
-    }
-
+) -> Result<(CombineOutcome, Vec<String>, Vec<modman_pak::PakArchive>), String> {
     let base_archive = modman_pak::PakArchive::open(base_pak)
         .map_err(|e| format!("{}: {e}", base_pak.display()))?;
     let base_src = FilePakSource(&base_archive);
@@ -2026,18 +2022,37 @@ pub fn run_to_dir(
         labels.push(label);
         archives.push(archive);
     }
-    let srcs: Vec<FilePakSource> = archives.iter().map(FilePakSource).collect();
-    let src_refs: Vec<&dyn PakSource> = srcs.iter().map(|s| s as &dyn PakSource).collect();
 
-    on_stage(&CombineStage::Merging);
-    // Filesystem frontends never need pass-through bytes in RAM: they are
-    // copied from the source pak straight into the staging tree below.
-    let opts = CombineOptions {
-        datatables_only: options.datatables_only,
-        defer_passthrough: true,
+    let outcome = {
+        let srcs: Vec<FilePakSource> = archives.iter().map(FilePakSource).collect();
+        let src_refs: Vec<&dyn PakSource> = srcs.iter().map(|s| s as &dyn PakSource).collect();
+        on_stage(&CombineStage::Merging);
+        // Filesystem frontends never need pass-through bytes in RAM: they are
+        // copied from the source pak straight into the output.
+        let opts = CombineOptions {
+            datatables_only: options.datatables_only,
+            defer_passthrough: true,
+        };
+        combine_sources_with(&base_src, &src_refs, &labels, &opts).map_err(|e| e.to_string())?
     };
-    let outcome =
-        combine_sources_with(&base_src, &src_refs, &labels, &opts).map_err(|e| e.to_string())?;
+
+    Ok((outcome, labels, archives))
+}
+
+/// Run a combine over paks on disk and write `SicarioCombine_P.pak` into
+/// `out_dir`. Returns the report; the caller decides how to show it.
+pub fn run_to_dir(
+    base_pak: &Path,
+    mod_paks: &[PathBuf],
+    out_dir: &Path,
+    options: &CombineOptions,
+    mut on_stage: impl FnMut(&CombineStage),
+) -> Result<CombineRun, String> {
+    if mod_paks.is_empty() {
+        return Err("no mod paks given".to_string());
+    }
+
+    let (outcome, labels, archives) = open_and_combine(base_pak, mod_paks, options, &mut on_stage)?;
 
     let total_files = outcome.files.len() + outcome.pass_through.len();
     if total_files == 0 {
@@ -2100,6 +2115,25 @@ pub fn run_to_dir(
     })
 }
 
+/// Run the merge's conflict pass without writing an output pak or a staging
+/// tree. Uses the same open-and-combine path as [`run_to_dir`], so the two
+/// reports cannot disagree.
+pub fn probe(
+    base_pak: &Path,
+    mod_paks: &[PathBuf],
+    options: &CombineOptions,
+) -> Result<CombineReport, String> {
+    if mod_paks.is_empty() {
+        return Err("no mod paks given".to_string());
+    }
+    let (outcome, labels, _) = open_and_combine(base_pak, mod_paks, options, |_| {})?;
+    let report = report_from_outcome(&outcome, labels);
+    if report.files == 0 {
+        return Err("nothing to combine (no conflicting overrides found)".to_string());
+    }
+    Ok(report)
+}
+
 #[cfg(test)]
 mod combine_options_tests {
     use super::*;
@@ -2136,18 +2170,144 @@ mod combine_options_tests {
 
     #[test]
     fn report_counts_match_the_outcome() {
-        let mut outcome = CombineOutcome::default();
-        outcome.merged = 2;
-        outcome.files.insert("a".to_string(), vec![1]);
-        outcome
-            .pass_through
-            .push(("b".to_string(), 0, "b".to_string()));
-        outcome.field_conflicts.push("x".to_string());
+        let outcome = CombineOutcome {
+            merged: 2,
+            files: [("a".to_string(), vec![1])].into(),
+            pass_through: vec![("b".to_string(), 0, "b".to_string())],
+            field_conflicts: vec!["x".to_string()],
+            ..Default::default()
+        };
         let report = report_from_outcome(&outcome, vec!["m".to_string()]);
         assert_eq!(report.merged, 2);
         assert_eq!(report.files, 2);
         assert_eq!(report.order, vec!["m".to_string()]);
         assert_eq!(report.field_conflicts, vec!["x".to_string()]);
+    }
+
+    fn temp_root(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("modman-core-{tag}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn packed_pak(root: &Path, stem: &str, ua: &[u8], ue: &[u8]) -> PathBuf {
+        let src = root.join(format!("src-{stem}"));
+        let data = src.join("ProjectWingman/Content/Data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("DB_LevelList.uasset"), ua).unwrap();
+        std::fs::write(data.join("DB_LevelList.uexp"), ue).unwrap();
+        let pak = root.join(format!("{stem}.pak"));
+        modman_pak::pack(&src, &pak, modman_pak::Version::V3, "../../../".to_string()).unwrap();
+        pak
+    }
+
+    fn packed_fixture(root: &Path, stem: &str, ua: &str, ue: &str) -> PathBuf {
+        packed_pak(root, stem, &fixture(ua), &fixture(ue))
+    }
+
+    #[test]
+    fn probe_matches_run_to_dir() {
+        let root = temp_root("probe-eq");
+        let base = packed_fixture(&root, "base", "DB_LevelList.uasset", "DB_LevelList.uexp");
+        let mod_pak = packed_fixture(
+            &root,
+            "mod",
+            "DB_LevelList.mod.uasset",
+            "DB_LevelList.mod.uexp",
+        );
+        let paks = vec![mod_pak];
+        let report = probe(&base, &paks, &CombineOptions::default()).unwrap();
+        let out = root.join("out");
+        let run = run_to_dir(&base, &paks, &out, &CombineOptions::default(), |_| {}).unwrap();
+        assert_eq!(report.merged, run.merged);
+        assert_eq!(report.files, run.files);
+        assert_eq!(report.order, run.order);
+        assert_eq!(report.field_conflicts, run.field_conflicts);
+        assert_eq!(report.pass_through_conflicts, run.pass_through_conflicts);
+        assert_eq!(report.warnings, run.warnings);
+        assert_eq!(report.skipped, run.skipped);
+        assert!(out.join(COMBINE_OUTPUT_NAME).exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn probe_reports_the_same_empty_set_errors() {
+        let root = temp_root("probe-empty");
+        let base = packed_fixture(&root, "base", "DB_LevelList.uasset", "DB_LevelList.uexp");
+        assert_eq!(
+            probe(&base, &[], &CombineOptions::default()).unwrap_err(),
+            "no mod paks given"
+        );
+        let stale = packed_fixture(
+            &root,
+            "SicarioCombine_P",
+            "DB_LevelList.mod.uasset",
+            "DB_LevelList.mod.uexp",
+        );
+        assert_eq!(
+            probe(&base, &[stale], &CombineOptions::default()).unwrap_err(),
+            "nothing to combine (no conflicting overrides found)"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn probe_order_reverses_the_winner() {
+        let root = temp_root("probe-order");
+        let vua = fixture("DB_LevelList.uasset");
+        let vue = fixture("DB_LevelList.uexp");
+        let vdt = DataTable::walk_bytes(&vua, &vue).unwrap();
+        let (row_name, prop_name, vstart) = vdt
+            .rows
+            .iter()
+            .find_map(|r| {
+                r.props.iter().find_map(|p| match &p.value {
+                    PropValue::Int(_) if p.vend - p.vstart == 4 => {
+                        Some((r.name.clone(), p.name.clone(), p.vstart))
+                    }
+                    _ => None,
+                })
+            })
+            .expect("fixture needs an int prop");
+
+        let mut a_ue = vue.clone();
+        a_ue[vstart..vstart + 4].copy_from_slice(&111i32.to_le_bytes());
+        let mut b_ue = vue.clone();
+        b_ue[vstart..vstart + 4].copy_from_slice(&222i32.to_le_bytes());
+        let base = packed_pak(&root, "base", &vua, &vue);
+        let a = packed_pak(&root, "a", &vua, &a_ue);
+        let b = packed_pak(&root, "b", &vua, &b_ue);
+
+        let ab = probe(&base, &[a.clone(), b.clone()], &CombineOptions::default()).unwrap();
+        let ba = probe(&base, &[b.clone(), a.clone()], &CombineOptions::default()).unwrap();
+        assert_eq!(ab.order, vec!["a.pak".to_string(), "b.pak".to_string()]);
+        assert_eq!(ba.order, vec!["b.pak".to_string(), "a.pak".to_string()]);
+        assert!(
+            !ab.field_conflicts.is_empty(),
+            "{row_name}.{prop_name} must conflict"
+        );
+        assert_ne!(ab.field_conflicts, ba.field_conflicts);
+        let first = &ab.field_conflicts[0];
+        assert!(
+            first.find("a.pak").unwrap() < first.find("b.pak").unwrap(),
+            "{first}"
+        );
+        let second = &ba.field_conflicts[0];
+        assert!(
+            second.find("b.pak").unwrap() < second.find("a.pak").unwrap(),
+            "{second}"
+        );
+
+        let out = root.join("out");
+        let run = run_to_dir(&base, &[a, b], &out, &CombineOptions::default(), |_| {}).unwrap();
+        assert_eq!(ab.field_conflicts, run.field_conflicts);
+        assert_eq!(ab.order, run.order);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
