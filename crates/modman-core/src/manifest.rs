@@ -330,61 +330,103 @@ fn normalize_value(value: &mut Value, mode: KeyMode) {
     }
 }
 
-/// Strip `//` and `/* */` comments and trailing commas (outside strings),
-/// matching the C# loader's JSON options.
+/// Strip `//` and `/* */` comments outside strings, then trailing commas.
+///
+/// Operates on bytes. The previous version pushed `bytes[i] as char`, which
+/// re-encoded every non-ASCII byte as Latin-1 and silently turned Cyrillic or
+/// CJK text in a preset into mojibake. Copying bytes preserves UTF-8.
 pub fn sanitize_json(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let bytes = input.as_bytes();
+    let stripped = strip_comments(input.as_bytes());
+    let stripped = strip_trailing_commas(&stripped);
+    String::from_utf8(stripped).expect("stripping JSON comments preserves UTF-8")
+}
+
+fn strip_comments(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     let mut in_str = false;
     let mut escaped = false;
     while i < bytes.len() {
-        let c = bytes[i] as char;
+        let b = bytes[i];
         if in_str {
-            out.push(c);
+            out.push(b);
             if escaped {
                 escaped = false;
-            } else if c == '\\' {
+            } else if b == b'\\' {
                 escaped = true;
-            } else if c == '"' {
+            } else if b == b'"' {
                 in_str = false;
             }
             i += 1;
             continue;
         }
-        match c {
-            '"' => {
+        match b {
+            b'"' => {
                 in_str = true;
-                out.push(c);
+                out.push(b);
                 i += 1;
             }
-            '/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                i += 2;
                 while i < bytes.len() && bytes[i] != b'\n' {
                     i += 1;
                 }
             }
-            '/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
                 i += 2;
                 while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
                     i += 1;
                 }
                 i = (i + 2).min(bytes.len());
             }
-            ',' => {
+            _ => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+fn strip_trailing_commas(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    let mut in_str = false;
+    let mut escaped = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_str {
+            out.push(b);
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'"' => {
+                in_str = true;
+                out.push(b);
+                i += 1;
+            }
+            b',' => {
                 let mut j = i + 1;
-                while j < bytes.len() && (bytes[j] as char).is_whitespace() {
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
                     j += 1;
                 }
                 if j < bytes.len() && (bytes[j] == b'}' || bytes[j] == b']') {
-                    // trailing comma — drop it
-                    i += 1;
+                    i += 1; // trailing comma, drop it
                 } else {
-                    out.push(c);
+                    out.push(b);
                     i += 1;
                 }
             }
             _ => {
-                out.push(c);
+                out.push(b);
                 i += 1;
             }
         }
@@ -576,6 +618,23 @@ mod tests {
         let v: Value = serde_json::from_str(&sanitize_json(raw)).unwrap();
         assert_eq!(v["url"], "https://example.com/path");
         assert_eq!(v["s"], "a // b /* c */");
+    }
+
+    #[test]
+    fn sanitize_preserves_non_ascii() {
+        let raw = r#"{ "text": "Сбить", "jp": "日本語", "emoji": "😀" }"#;
+        let v: Value = serde_json::from_str(&sanitize_json(raw)).unwrap();
+        assert_eq!(v["text"], "Сбить");
+        assert_eq!(v["jp"], "日本語");
+        assert_eq!(v["emoji"], "😀");
+    }
+
+    #[test]
+    fn sanitize_handles_a_comma_before_a_comment() {
+        let raw = "{\n  \"a\": 123, // trailing\n  \"b\": [1, /* x */ ],\n}";
+        let v: Value = serde_json::from_str(&sanitize_json(raw)).unwrap();
+        assert_eq!(v["a"], 123);
+        assert_eq!(v["b"][0], 1);
     }
 
     #[test]
