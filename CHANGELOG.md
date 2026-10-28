@@ -21,9 +21,10 @@ chose.
   archive". It is now refused with nothing written. The zip branch already used
   the `zip` crate's own path check and RAR already validated each name, so 7z was
   the only hole.
-- Extraction is otherwise unchanged: all 18 `.7z` archives in the mod corpus
-  unpack to the same file list and the same SHA-256 per file under both
-  libraries, and a merged pak built from a 7z mod keeps its hash.
+- Extraction is otherwise unchanged: all nine `.7z` archives in the mod corpus
+  (18 files across the download and corpus folders) unpack to the same file list
+  and the same SHA-256 per file under both libraries, and a merged pak built
+  from a 7z mod keeps its hash.
 - A malformed `.locres` file can no longer crash the parser. Three shapes did:
   an FString length of `i32::MIN` overflowed the negation, and on the 32-bit
   wasm build the doubled byte count wrapped to zero, so the bounds check passed
@@ -44,18 +45,26 @@ chose.
 
 ### Changed
 - Archive and support crates are current: `zip` 9.0.5 to 9.1.2, `rars` 0.11 to
-  0.12.2 (still read-only, the writer stays out of the binary), `typed-path` 0.13
-  through `repak`, and exact pins for `eframe`, `rfd` and the wasm crates in
-  place of loose ranges. `cargo audit` reports no vulnerabilities and no
-  unmaintained crates. The yanked `clipboard-win` it flagged is gone too, see
-  Fixed below.
-- Only the desktop app changes: Linux amd64 goes from 10.89 MB in 0.5.1 to
-  11.13 MB, the cost of the path-checking extractor. The command line build is
-  unchanged, because every bumped crate is reachable only from the GUI.
-- No measurable speed change. Paired, interleaved runs of 0.5.1 against this
-  build on the GUI merge path stay inside the run-to-run spread of a merge that
-  packs on six threads. Peak memory is identical at 250 MB (six paks), 213 MB (a
-  20 MB zip) and 280 MB (the 29-pak set), and the merged output is byte-identical.
+  0.12.2 (still read-only, the writer stays out of the binary), and `typed-path`
+  0.12.4 to 0.13.0, which arrives through `zip`. The GUI and wasm manifests name
+  the releases already in the lock (`eframe` 0.37.0, `rfd` 0.17.2,
+  `wasm-bindgen` 0.2.129, `js-sys` 0.3.106) where they used to carry bare minor
+  numbers; Cargo resolves the same versions either way, because the lock is what
+  pins them. `cargo audit` reports no vulnerabilities and no unmaintained
+  crates. The yanked `clipboard-win` it flagged is gone too, see Fixed below.
+- The dependency update leaves the command line build alone: it keeps its 0.5.1
+  size (3,287,448 bytes), because every bumped crate is reachable only from the
+  GUI. The Linux amd64 desktop app goes from 10,892,688 bytes in 0.5.1 to
+  11,096,536 (10.89 MB to 11.10 MB), the cost of the newer extractors. Clipboard
+  support later costs another 1,197,816 bytes, see Fixed below.
+- No measurable speed change. Paired, interleaved runs of 0.5.1 against the
+  dependency-update build on the GUI merge path stay inside the run-to-run
+  spread of a merge that packs on six threads (the box sat at load ~9 while
+  measuring): CPU moved by -1.4% over three paired runs on six paks, +9.7% over
+  three on a 20 MB zip, and +1.8% on a single paired run over the 29-pak set,
+  all inside the +/-10% spread identical runs show. Peak memory is flat, at
+  195 MB (six paks), 158 to 159 MB (a 20 MB zip) and 226 MB (the 29-pak set),
+  and the merged output is byte-identical.
 
 ### Removed
 - `modman pack --compression zlib|gzip|zstd|lz4` is gone, and with it the
@@ -67,25 +76,29 @@ chose.
   `compression` error, the same way Oodle already did, instead of half-working.
 - Removing it drops `zstd`, `zstd-safe`, `zstd-sys`, `lz4_flex` and
   `twox-hash` from the dependency tree. Those carried three RUSTSEC-2026
-  advisories against `zstd 0.13.3` (0391, 0398, 0403; no fixed 0.13 release
-  exists, and a `[patch]` cannot bridge a `^0.13` requirement to 0.14) plus five
-  unsound warnings on `zstd-safe`, all of which `cargo audit` reports. They
-  entered the advisory database on 2026-10-26, the same day the crate bumps
-  above were written, which is why that bullet could still say the audit was
-  clean. It is clean again now, apart from the yanked `clipboard-win`.
-- What it was costing: the command line binary goes from 3,278,592 bytes to
-  2,154,520, the wasm module from 669,791 to 373,096, and the offline
-  single-file page from 944,603 to 549,078. The merged output is unchanged: the
-  same four-pak merge hashes `740552fe7dc6ec20…` before and after, and the
-  browser merge of a two-pak set hashes `4075fc25ab5ec47a…` on both builds.
+  advisories in the zstd stack: 0391 against `zstd` 0.13.3, and 0398 and 0403
+  against `zstd-safe` 7.3.0. No fixed 0.13 or 7.x release exists (the fixes are
+  `zstd` 0.14.3 and `zstd-safe` 8.2.0), and a `[patch]` cannot bridge a `^0.13`
+  requirement to 0.14. `zstd-safe` also carried ten unsound warnings. `cargo
+  audit` reports all of it. The advisories were assigned in the database on
+  2026-10-26, the same day the crate bumps above were written, which is why that
+  bullet could still say the audit was clean. It is clean again now, apart from
+  the yanked `clipboard-win`.
+- What it was costing: the command line binary goes from 3,287,448 bytes to
+  2,153,168, the wasm module from 674,866 to 373,235, and the offline single-file
+  page from 949,904 to 549,539. The merged output is unchanged: the 29-pak set
+  hashes `555dca0d12d2ac24…` at 4,607,949,935 bytes on both builds, a GUI run of
+  the Nimble NPCs `.7z` still produces `534a8e19…` (77,324 bytes), and the wasm
+  merge of four mod paks matches the CLI byte for byte (`101ce6d6…`, 88,193
+  bytes).
 
 ### Fixed
 - Copy and paste work in the desktop app. `eframe` is built with
   `default-features = false`, and the feature list did not include `clipboard`,
   so egui's clipboard backend was compiled out entirely: Ctrl+C on the log pane
   or a path field did nothing, and nothing said so. The feature is on now, which
-  brings `arboard` and costs 1,198,416 bytes on the Linux GUI (10,655,976 to
-  11,854,392). The command line build is untouched, and its checksums are
+  brings `arboard` and costs 1,197,816 bytes on the Linux GUI (10,654,176 to
+  11,851,992). The command line build is untouched, and its checksums are
   unchanged.
 - `clipboard-win` moves from 5.4.1 to 5.4.3, the first release of that crate
   that crates.io has not withdrawn (5.2.0 through 5.4.1 are all yanked, which is
