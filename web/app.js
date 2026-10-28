@@ -678,7 +678,7 @@ function showReport(report) {
   }
 
   if (report.conflicts && report.conflicts.length) {
-    html += '<h3 class="warn">Conflicts (later mod won)</h3><ul class="conflicts">';
+    html += '<h3 class="warn">Conflicts (the second entry named wins)</h3><ul class="conflicts">';
     for (const c of report.conflicts) html += `<li>${escapeHtml(c)}</li>`;
     html += '</ul>';
   } else {
