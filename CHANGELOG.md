@@ -98,9 +98,10 @@ removed `modman pack --compression` flag.
   warnings. The advisories were assigned on 2026-10-26, the same day as the
   bumps above, which is why that bullet could still call the audit clean.
 - What it was costing: the CLI goes from 3,287,448 bytes to 2,168,560, the wasm
-  module from 674,866 to 376,653, and the single-file page from 949,904 to
-  568,876 (local release builds). The compression removal accounted for most of
-  it (2,153,168 / 373,235 / 549,539); the order controls and probe add the rest.
+  module from 674,866 to 376,173, and the single-file page from 949,904 to
+  568,236 (wasm and page from the deployed Pages artifacts; the CLI figure is
+  a local release build). The compression removal accounted for most of it
+  (2,153,168 / 373,235 / 549,539); the order controls and probe add the rest.
   Output is unchanged: the 29-pak set hashes `555dca0d12d2ac24…` at
   4,607,949,935 bytes on both builds, a GUI run of the Nimble NPCs `.7z` still
   produces `534a8e19…` (77,324 bytes), and the wasm merge of four mod paks
