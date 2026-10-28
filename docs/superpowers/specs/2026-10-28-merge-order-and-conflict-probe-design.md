@@ -167,8 +167,11 @@ Drag uses egui 0.37's `dnd_drag_source` and `dnd_drop_zone`. If row-level drop
 zones fight the scroll area, the up and down buttons remain the complete
 fallback and drag is optional; the order logic is the same either way.
 
-The merge button asks the tab for `application_inputs()` and passes that to
-`Job::Merge`.
+Every entry point uses `application_inputs()`: the Merge button, the
+`auto_merge` path in `main.rs` (which today clones `self.merge.inputs`), and the
+headless `--merge-now` and `--probe-now` paths. `--first-wins` sets the tab's
+direction before a job is built, so the headless paths exercise the same
+derivation as the button.
 
 The probe runs on its own thread, not through the application's single job
 slot, so a probe never disables the Merge button. `MergeTab` owns:
@@ -176,6 +179,7 @@ slot, so a probe never disables the Merge button. `MergeTab` owns:
 ```rust
 struct ProbeState {
     generation: u64,
+    inflight_generation: Option<u64>,
     due: Option<Instant>,
     receiver: Option<Receiver<Result<CombineReport, String>>>,
     result: Option<CombineReport>,
@@ -184,18 +188,21 @@ struct ProbeState {
 ```
 
 A change to the list or the switch sets `due = now + 400ms` and increments the
-generation. When the deadline passes and no probe is running, the tab spawns a
-thread with the base pak and the current application inputs. The thread extracts
-archives into temporary directories with the same helper the merge job uses,
-calls `core::combine::probe`, and sends the result. The tab polls the receiver
-each frame; a result whose generation is stale is discarded. Temporary
-directories are removed when the thread finishes, success or error.
+generation. When the deadline passes and no probe is running, the tab records
+`inflight_generation = Some(generation)`, spawns a thread with the base pak and
+the current application inputs, and sends the result. The thread captures its
+generation in the message. The tab polls the receiver each frame and discards a
+result whose captured generation is not both the in-flight generation and the
+current generation. Temporary directories are removed when the thread finishes,
+success or error.
 
 The probe result appears in its own panel: counts for field conflicts,
-pass-through conflicts and warnings, each expandable into the list. Errors and
-"nothing to combine" appear there too and never block merging. A "Check now"
-button clears the debounce and starts a probe immediately; it is disabled while
-one is running. The merge report continues to go to the log.
+pass-through conflicts and warnings, each expandable into the list. An error
+sets `error` but leaves the last successful `result` in place, so the panel
+shows the previous conflicts plus the error banner; "nothing to combine" is
+rendered as a state. Neither blocks merging. A "Check now" button clears the
+debounce and starts a probe immediately; it is disabled while one is running.
+The merge report continues to go to the log.
 
 `job.rs` factors the current archive extraction out of the merge job into a
 helper that both the merge job and the probe thread call:
@@ -214,16 +221,21 @@ is deleted. The 29-pak gate passes its paks alphabetically, so its hash is
 unchanged.
 
 The merge job keeps its existing `TempDirs` lifetime and cleanup. The probe
-thread owns its own `TempDirs` for the duration of the probe.
+thread owns its own `TempDirs` and keeps them alive until `probe` returns;
+`probe` drops its `PakArchive` handles before returning, so the directories are
+never removed while a reader is open.
 
 For headless testing, the GUI gains the same kind of hook as `--merge-now`:
 
-- `--probe-now`: run the probe for the given inputs, print the report, and exit
-  with `--exit-when-done`.
-- `--first-wins`: derive the application order from the reversed input list, so
-  the order switch is exercised without a pointer.
+- `--probe-now`: run the probe for the given inputs and print the report. Exit 0
+  on a report and 1 on an error. With no base pak it prints
+  `No game pak found in <dir>` and exits 1, matching the auto-merge message.
+  With no inputs it prints `no mod paks given` and exits 1.
+- `--merge-now`: unchanged, except that it now uses `application_inputs()`.
+- `--first-wins`: set the tab's direction before either auto path, so the
+  reversed application order is exercised without a pointer.
 
-Both flags are test hooks, not the main interface.
+All three are test hooks, not the main interface.
 
 ### Browser
 
@@ -245,12 +257,14 @@ Both flags are test hooks, not the main interface.
   Adding or removing a mod rebuilds the session and reassigns the indices.
 - `direction` is `'last'` or `'first'`; the application order is the display
   order or its reverse.
-- One `MergeSession` is kept per mod-set and game-pak pair. It is created on the
-  first probe or merge, holds the mod bytes read once in canonical order, and
-  reuses the cached base-pak regions. Adding or removing a mod, or changing the
-  game pak, invalidates the session. After a successful merge the session is
-  freed, matching today's memory behavior; the next probe or merge reads the
-  files again.
+- One `MergeSession` is kept per mod-set and game-pak pair. The identity key is
+  the game file's name, size and last-modified time plus each mod's name, size
+  and last-modified time. Adding or removing a mod, or changing the game pak,
+  invalidates the session; reordering does not. It is created on the first probe
+  or merge, holds the mod bytes read once in canonical order, and reuses the
+  cached base-pak regions. After a successful merge the session is freed,
+  matching today's memory behavior; the next probe or merge reads the files
+  again.
 - Before every probe or merge the page calls `session.set_order(...)` with the
   canonical application indices.
 - A reorder or a switch change sets a 400 ms debounce. The probe loop calls
@@ -261,6 +275,8 @@ Both flags are test hooks, not the main interface.
   it is disabled while one is in flight.
 - `showReport` renders the order section from `modFiles` and marks skipped
   entries from `report.skipped`, rather than rendering `report.order` directly.
+  The engine skips by label, so every row whose label is in the list is marked;
+  duplicate filenames are all skipped, which is what the engine does.
 - The probe panel is separate from the merge result panel.
 
 `crates/modman-wasm`:
@@ -278,8 +294,11 @@ impl MergeSession {
 shared internals become
 `try_merge(&self, pack: bool) -> Result<(Option<Vec<u8>>, String), MergeErr>`;
 `step` passes true and returns an internal error if the pak is absent,
-`probe_step` passes false and returns the report alone. A native unit test
-covers permutation validation.
+`probe_step` passes false and returns the report alone. When `pack` is false,
+`try_merge` calls `combine_sources_with` with `defer_passthrough: true` and
+skips the pak writer; when true it keeps the merge's behavior, because the
+output needs the pass-through bytes. A native unit test covers permutation
+validation.
 
 The single-file build inlines the new HTML, CSS and JavaScript through the
 existing builder; no change is needed there. The script tags stay at
@@ -296,9 +315,11 @@ when the probe ends.
 
 Both `probe` and `run_to_dir` receive the same `CombineOptions` from a caller
 (the desktop app passes `CombineOptions::default()` to both) and both force
-`defer_passthrough: true`. `probe` returns the same "nothing to combine" error
-as `run_to_dir` when the outcome has no datatables and no pass-through entries;
-the panel renders that message as a state.
+`defer_passthrough: true`. `probe` reproduces both of the merge's empty-set
+errors: `no mod paks given` for an empty slice and `nothing to combine` when the
+outcome has no datatables and no pass-through entries. The panel renders either
+message as a state. The browser probe sets `defer_passthrough` too, so it does
+not read pass-through bytes; the browser merge does, because it packs them.
 
 A probe is therefore not free on a large set. It is the datatable half of a
 merge without the multi-gigabyte write. The 400 ms debounce exists so a burst of
@@ -320,11 +341,14 @@ stale and waits for the current step to return.
 - No base pak in the desktop app, or no game pak in the browser, disables
   the probe and shows the same reason the merge button is disabled.
 - A merge error is unchanged.
-- An empty input list disables the merge and clears the probe panel.
+- An empty input list disables the merge and clears the probe panel. Core
+  returns `no mod paks given`; the headless paths print it and exit 1.
 - An archive that fails to extract fails the probe with that archive's message;
   it does not abort a later merge attempt, which retries extraction.
 - A probe of a set with no datatables and no pass-through entries returns the
   merge's "nothing to combine" error and shows it in the panel.
+- A failed probe leaves the previous successful report visible alongside the
+  error; it is never replaced by an empty result.
 - A stale probe result is dropped silently.
 - A session with a changed mod set is rebuilt; old bytes are released.
 
@@ -347,10 +371,14 @@ stale and waits for the current step to return.
   directions, including the first and last boundaries.
 - Headless: `modman-gui <two conflicting paks> --probe-now --exit-when-done`
   prints a report with the expected winner; `--first-wins` flips the winner in
-  the same probe.
+  the same probe. `--merge-now --first-wins` writes the reversed-order pak, so
+  the auto-merge path is covered too.
+- `--probe-now` with no game pak exits 1 with the auto-merge message.
 - A headless merge with an explicit input order writes a pak whose conflicting
   field has the expected winner. The 29-pak merge hash gate stays; its inputs
-  are already alphabetical, so removing the sort must not change it.
+  arrive from a lexical shell glob, so removing the sort must not change it.
+  Verify the gate's argv order before relying on it, and sort explicitly if it
+  ever moves to `find` or another unordered source.
 - Folder import sorts the collected paks; two archives keep their blocks in
   input order, with each archive's paks alphabetical inside the block.
 
@@ -401,8 +429,8 @@ rendered strings.
       user arranged, with drag, up and down, and remove.
 - [ ] Moving a row or flipping the direction changes which mod wins a
       conflicting field, with no file renaming.
-- [ ] The direction switch is honored by both the probe and the merge, and the
-      winning end is marked.
+- [ ] The direction switch is honored by both the probe and the merge, including
+      the auto-merge and headless paths, and the winning end is marked.
 - [ ] The probe runs automatically after a reorder, is debounced, can be
       refreshed with a button in both interfaces, and never blocks the Merge
       button in the desktop app.
