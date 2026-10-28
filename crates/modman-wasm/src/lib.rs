@@ -25,28 +25,36 @@ fn console_error(msg: &str) {
     }
 }
 
-/// Report panics with their real message instead of a bare
-/// "unreachable executed" trap; users can then paste the console line into
-/// a bug report and we can act on it.
+thread_local! {
+    static LAST_PANIC: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Report panics with their real message instead of a bare "unreachable"
+/// trap, and remember the message for `last_panic()`.
 #[wasm_bindgen(start)]
 pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
+        let message = info.to_string();
+        LAST_PANIC.with(|slot| *slot.borrow_mut() = Some(message.clone()));
         console_error(&format!(
-            "modman-wasm panicked: {info}\n\
+            "modman-wasm panicked: {message}\n\
              (please report this with the mod names used at \
              https://github.com/emberglazee/project-modman/issues)"
         ));
     }));
 }
 
-fn panic_message(e: Box<dyn std::any::Any + Send>) -> String {
-    if let Some(s) = e.downcast_ref::<String>() {
-        s.clone()
-    } else if let Some(s) = e.downcast_ref::<&'static str>() {
-        (*s).to_string()
-    } else {
-        "unknown panic".to_string()
-    }
+/// The last panic message, if this module trapped. JS reads it after a
+/// `RuntimeError` to tell a real panic from an out-of-memory abort.
+#[wasm_bindgen]
+pub fn last_panic() -> Option<String> {
+    LAST_PANIC.with(|slot| slot.borrow().clone())
+}
+
+/// Clear the remembered panic before a new operation.
+#[wasm_bindgen]
+pub fn clear_last_panic() {
+    LAST_PANIC.with(|slot| *slot.borrow_mut() = None);
 }
 
 /// Provided byte regions of the game pak, sorted by offset.
@@ -75,12 +83,14 @@ impl SparseReader {
         }
     }
 
-    fn region_containing(&self, off: u64, len: usize) -> Option<&[u8]> {
+    /// The provided bytes starting at `off`, however many there are. A read
+    /// that spans two provided regions returns the first region's tail; the
+    /// next call continues in the second.
+    fn region_at(&self, off: u64) -> Option<&[u8]> {
         self.regions.iter().find_map(|(start, data)| {
             let end = start + data.len() as u64;
-            if off >= *start && off + len as u64 <= end {
-                let s = (off - start) as usize;
-                Some(&data[s..s + len])
+            if off >= *start && off < end {
+                Some(&data[(off - start) as usize..])
             } else {
                 None
             }
@@ -97,11 +107,15 @@ impl Read for SparseReader {
         if self.pos >= self.size {
             return Ok(0);
         }
-        let want = len.min((self.size - self.pos) as usize);
-        if let Some(slice) = self.region_containing(self.pos, want) {
-            buf[..want].copy_from_slice(slice);
-            self.pos += want as u64;
-            Ok(want)
+        // Do the clamp in u64: casting the remaining length to usize truncates
+        // a 17 GB game pak on wasm32.
+        let remaining = self.size - self.pos;
+        let want = len.min(usize::try_from(remaining).unwrap_or(usize::MAX));
+        if let Some(slice) = self.region_at(self.pos) {
+            let n = want.min(slice.len());
+            buf[..n].copy_from_slice(&slice[..n]);
+            self.pos += n as u64;
+            Ok(n)
         } else {
             // Record the missing range (coalesced; min 64 KiB window so we
             // never ask the browser for tiny reads).
@@ -210,20 +224,9 @@ impl MergeSession {
     ///   {status:"done", pak: Uint8Array, report: <json string>}
     pub fn step(&mut self) -> Result<JsValue, JsValue> {
         *self.missing.borrow_mut() = None;
-        // Contain internal panics: the page gets a readable error (with the
-        // panic message once the hook above has logged it) instead of a bare
-        // wasm trap, and the session stays usable.
-        let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.try_merge()));
-        let attempt = match attempt {
-            Ok(r) => r,
-            Err(panic) => {
-                return Err(JsValue::from_str(&format!(
-                    "internal error: {} (details were logged to the browser console)",
-                    panic_message(panic)
-                )));
-            }
-        };
-        match attempt {
+        // A panic here aborts the wasm module (panic = abort); the hook records
+        // the message for `last_panic()`, which JS reads after the trap.
+        match self.try_merge() {
             Ok((pak, report)) => {
                 let obj = js_sys::Object::new();
                 let _ = js_sys::Reflect::set(&obj, &"status".into(), &"done".into());
@@ -297,7 +300,7 @@ impl MergeSession {
         let labels: Vec<String> = self.mods.iter().map(|(l, _)| l.clone()).collect();
 
         // 3. The shared combine.
-        let outcome = match combine_sources(&base, &src_refs, &labels) {
+        let mut outcome = match combine_sources(&base, &src_refs, &labels) {
             Ok(o) => o,
             Err(e) => {
                 if let Some((s, e2)) = *self.missing.borrow() {
@@ -307,7 +310,10 @@ impl MergeSession {
             }
         };
 
-        // 4. Write the merged V3 pak (same params as the CLI).
+        // 4. Write the merged V3 pak (same params as the CLI). The file map is
+        // consumed, not cloned: the browser holds every byte in wasm memory, so
+        // a second copy of the output is fatal on the same sets.
+        let file_count = outcome.files.len();
         let mut cursor = Cursor::new(Vec::new());
         {
             let mut writer = repak::PakBuilder::new().writer(
@@ -316,11 +322,9 @@ impl MergeSession {
                 "../../../".to_string(),
                 None,
             );
-            let mut paths: Vec<&String> = outcome.files.keys().collect();
-            paths.sort();
-            for p in paths {
-                let data = outcome.files.get(p).unwrap().clone();
-                writer.write_file(p, false, data).map_err(map_err)?;
+            let files = std::mem::take(&mut outcome.files);
+            for (p, data) in files {
+                writer.write_file(&p, false, data).map_err(map_err)?;
             }
             writer.write_index().map_err(map_err)?;
         }
@@ -328,7 +332,7 @@ impl MergeSession {
         // 5. Report JSON.
         let report = serde_json::json!({
             "merged": outcome.merged,
-            "files": outcome.files.len(),
+            "files": file_count,
             "order": labels,
             "conflicts": outcome.field_conflicts,
             "passThroughConflicts": outcome.pass_through_conflicts,

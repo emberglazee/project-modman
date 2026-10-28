@@ -123,6 +123,23 @@ chose. The minor number is for the removed `modman pack --compression` flag.
   templates, empty templates (which matched every byte), and `valueBefore`
   writes past a shrunken buffer. Each has a regression test; the corpus and
   oracle gates are unchanged.
+- Browser merges use less memory. The output file map is consumed instead of
+  cloned, a read that spans two fetched regions returns the bytes already
+  present instead of refetching, and the remaining-length clamp is done in
+  `u64`, where a 17 GB pak truncated on wasm32. A panic no longer pretends to
+  be caught by a `catch_unwind` that `panic = abort` never enters: the hook
+  records the message for `last_panic()`, and the page reports it as an
+  internal error rather than out of memory.
+- Desktop jobs are single-flight. A second start is refused while one runs, a
+  worker that dies clears the spinner, archive extraction uses a unique
+  directory per job and removes it when the job ends, and an archive with no
+  paks reports that instead of being ignored. Build's scratch directory is per
+  process and removed after packing.
+- Docs: the PowerShell and `.bat` examples use `${env:ProgramFiles(x86)}` and
+  `%ProgramFiles(x86)%`; the FAQ no longer calls the tool read-only (the GUI
+  install button writes to `~mods`), its single-file size is 0.55 MB, the
+  README GUI size is 11.9 MB, and ARCHITECTURE's pak-version note matches
+  `pack`'s V11 default.
 
 ## [v0.5.1] — 2026-10-25
 

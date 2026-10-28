@@ -275,7 +275,7 @@ pub fn build_pak(
     let pak = modman_pak::PakArchive::open(&main_pak_path)
         .map_err(|e| BuildError::new(1, format!("Pak error: {e}")))?;
     let all_files = pak.files();
-    let extract_dir = std::env::temp_dir().join("modman-build");
+    let extract_dir = std::env::temp_dir().join(format!("modman-build-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&extract_dir);
     std::fs::create_dir_all(&extract_dir).map_err(|e| e.to_string())?;
 
@@ -415,5 +415,6 @@ pub fn build_pak(
     // The staging dir is scratch: the C# transport left none behind, and in the
     // Vortex flow it would deploy to the game as junk files.
     let _ = std::fs::remove_dir_all(out_dir.join("staging"));
+    let _ = std::fs::remove_dir_all(&extract_dir);
     Ok((merged_count, files.len(), field_conflicts))
 }

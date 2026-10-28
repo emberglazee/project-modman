@@ -109,7 +109,7 @@ WebAssembly, running entirely in your browser:
 ### Desktop app — no terminal needed
 
 `modman-gui` is the same engine in a native window: egui, no browser engine, one
-binary at about 11.1 MB. Download it from the release page and double-click; it
+binary at about 11.9 MB. Download it from the release page and double-click; it
 finds the game on its own, and asks if it cannot.
 
 - **Merge mods**: drag `.rar`, `.7z`, `.zip` or `.pak` files onto the window.

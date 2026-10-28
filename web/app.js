@@ -118,7 +118,23 @@ function newRunRecord() {
 function classifyError(e) {
   const raw = String((e && e.message) || e || '');
   const run = lastRun || {};
+  let lastPanic = '';
+  try {
+    if (typeof wasm_bindgen !== 'undefined' && wasm_bindgen.last_panic) {
+      lastPanic = wasm_bindgen.last_panic() || '';
+    }
+  } catch (_) {
+    // The module may be unusable after a trap; fall back to the raw text.
+  }
 
+  if (lastPanic && /unreachable|RuntimeError/i.test(raw)) {
+    return {
+      title: 'The merge engine hit an internal error',
+      body:
+        `This one is a bug in modman, not something you did. The engine reported:\n\n${lastPanic}\n\n` +
+        `Please report it with the diagnostics text attached; it is what makes these fixable.`,
+    };
+  }
   // "unreachable" is unanchored on purpose: an allocation failure while mods
   // are being loaded arrives wrapped as "could not load X as a pak: unreachable",
   // and an anchored match sent that to the generic handler. Rust aborts on
@@ -258,6 +274,7 @@ async function runMerge() {
   mergeBtn.disabled = true;
   resultPak = null;
   lastRun = newRunRecord();
+  wasm_bindgen.clear_last_panic();
   let bytesRead = 0;
   let loadingMod = null;
   let session = null;
@@ -512,6 +529,7 @@ if (locresToCsvBtn) {
   locresToCsvBtn.addEventListener('click', () => {
     if (!wasmReady || !locresBytes) return;
     try {
+      wasm_bindgen.clear_last_panic();
       const csv = wasm_bindgen.locres_to_csv(locresBytes);
       const name = locresName.replace(/\.locres$/i, '') + '.csv';
       downloadBytes(csv, name, 'text/csv');
@@ -527,6 +545,7 @@ if (locresPatchBtn) {
     if (!wasmReady || !locresBytes || !locresCsvText) return;
     let patched = null;
     try {
+      wasm_bindgen.clear_last_panic();
       patched = wasm_bindgen.locres_patch(locresBytes, locresCsvText);
       downloadBytes(patched.bytes, locresName);
       locresSay(`Patched ${patched.patched} string(s); downloaded ${locresName}.`);

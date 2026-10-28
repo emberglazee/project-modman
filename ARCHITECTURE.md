@@ -9,7 +9,7 @@ between the layers, and where a new feature belongs.
 
 | Crate | Package name | Role | Depends on |
 |---|---|---|---|
-| `modman-pak` | `modman-pak` | Reads and writes `.pak` archives (V3, V8, V11 in, V3 out). Owns the footer, index and entry tables. | none |
+| `modman-pak` | `modman-pak` | Reads `.pak` archives (V3, V8, V11) and writes V3 from the merger, or the version `pack` is asked for (V11 by default). Owns the footer, index and entry tables. | none |
 | `modman-uasset` | `modman-uasset` | Reads and splices cooked `.uasset` and `.uexp` pairs: header, name and import tables, the DataTable walker, the byte editor, table rewriting, object-import insertion, SoundWave extraction, name hashing. Knows nothing about mods. | none |
 | `modman-core` | `modman-core` | Everything in between: manifests, templates, fragments, patch parsing, resolution, length-changing row operations, the merge pipeline, `combine`, locres, audio, component discovery. | pak, uasset |
 | `modman-cli` | `modman` | The command line. Argument parsing, path handling, progress and report output, file writing. | core, pak, uasset |

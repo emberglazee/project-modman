@@ -4,6 +4,7 @@
 //! tab can never grow behaviour the command line does not have.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 use modman_core::combine::{CombineOptions, FilePakSource};
@@ -414,6 +415,26 @@ fn run(job: Job, send: &dyn Fn(Msg)) -> Result<JobOutput, String> {
     }
 }
 
+/// Removes per-job extraction directories when the job ends, success or error.
+#[derive(Default)]
+struct TempDirs(Vec<PathBuf>);
+
+impl TempDirs {
+    fn push(&mut self, dir: PathBuf) {
+        self.0.push(dir);
+    }
+}
+
+impl Drop for TempDirs {
+    fn drop(&mut self) {
+        for d in &self.0 {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+}
+
+static EXTRACT_SEQ: AtomicU64 = AtomicU64::new(0);
+
 /// The merge job: extract archives, then run the shared combine.
 fn merge(
     base_pak: &std::path::Path,
@@ -422,6 +443,7 @@ fn merge(
     send: &dyn Fn(Msg),
 ) -> Result<JobOutput, String> {
     let mut paks: Vec<PathBuf> = Vec::new();
+    let mut temps = TempDirs::default();
     let total = inputs.len();
     for (i, path) in inputs.iter().enumerate() {
         let label = path
@@ -444,11 +466,19 @@ fn merge(
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| format!("mod{i}"));
-        let dest = std::env::temp_dir().join("modman-gui-extract").join(&stem);
-        let _ = std::fs::remove_dir_all(&dest);
+        let seq = EXTRACT_SEQ.fetch_add(1, Ordering::Relaxed);
+        let dest = std::env::temp_dir()
+            .join("modman-gui-extract")
+            .join(format!("{}-{seq}-{stem}", std::process::id()));
+        temps.push(dest.clone());
         match crate::archive::extract_archive(path, &dest) {
-            Ok(0) => return Err(format!("{label}: no .pak files inside the archive")),
-            Ok(_) => paks.extend(crate::archive::collect_paks(&dest)),
+            Ok(_) => {
+                let found = crate::archive::collect_paks(&dest);
+                if found.is_empty() {
+                    return Err(format!("{label}: no .pak files inside the archive"));
+                }
+                paks.extend(found);
+            }
             Err(e) => return Err(format!("{label}: {e}")),
         }
     }

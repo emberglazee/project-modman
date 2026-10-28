@@ -176,6 +176,21 @@ impl App {
                 }
             }
         }
+        if !finished
+            && matches!(
+                rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Disconnected)
+            )
+        {
+            // The worker panicked or exited without sending Done; without this
+            // the spinner would run forever.
+            self.running = false;
+            self.status = "Failed.".to_string();
+            self.log
+                .push_str("Error: the worker stopped without a result\n");
+            eprintln!("FAILED worker disconnected");
+            finished = true;
+        }
         if !finished {
             self.rx = Some(rx);
         } else if self.exit_when_done {
@@ -343,41 +358,46 @@ impl eframe::App for App {
             .and_then(|p| modman_core::game::find_base_pak(p));
         let mut job: Option<(Job, bool)> = None;
 
-        egui::CentralPanel::default().show(root, |ui| match self.tab {
-            Tab::Merge => {
-                if let Some(j) = self.merge.ui(ui, game_paks.as_deref()) {
-                    job = Some((j, true));
+        let busy = self.running;
+        egui::CentralPanel::default().show(root, |ui| {
+            ui.add_enabled_ui(!busy, |ui| match self.tab {
+                Tab::Merge => {
+                    if let Some(j) = self.merge.ui(ui, game_paks.as_deref()) {
+                        job = Some((j, true));
+                    }
                 }
-            }
-            Tab::Build => {
-                if let Some(j) = self.build.ui(ui, self.game_root.as_deref()) {
-                    job = Some((j, false));
+                Tab::Build => {
+                    if let Some(j) = self.build.ui(ui, self.game_root.as_deref()) {
+                        job = Some((j, false));
+                    }
                 }
-            }
-            Tab::Audio => {
-                if let Some(j) = self.audio.ui(ui, game_pak.as_deref()) {
-                    job = Some((j, false));
+                Tab::Audio => {
+                    if let Some(j) = self.audio.ui(ui, game_pak.as_deref()) {
+                        job = Some((j, false));
+                    }
                 }
-            }
-            Tab::Locres => {
-                if let Some(j) = self.locres.ui(ui, game_pak.as_deref()) {
-                    job = Some((j, false));
+                Tab::Locres => {
+                    if let Some(j) = self.locres.ui(ui, game_pak.as_deref()) {
+                        job = Some((j, false));
+                    }
                 }
-            }
-            Tab::Pak => {
-                if let Some(j) = self.pak.ui(ui) {
-                    job = Some((j, false));
+                Tab::Pak => {
+                    if let Some(j) = self.pak.ui(ui) {
+                        job = Some((j, false));
+                    }
                 }
-            }
-            Tab::Tools => {
-                if let Some(j) = self.tools.ui(ui, game_paks.as_deref()) {
-                    job = Some((j, false));
+                Tab::Tools => {
+                    if let Some(j) = self.tools.ui(ui, game_paks.as_deref()) {
+                        job = Some((j, false));
+                    }
                 }
-            }
+            });
         });
 
         if let Some((job, is_merge)) = job {
-            self.start(job, is_merge);
+            if !self.running {
+                self.start(job, is_merge);
+            }
         }
     }
 }

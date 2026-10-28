@@ -64,7 +64,7 @@ guesses wrong, or if the game is somewhere unusual.
 This merges every pak in your mods folder into a single file:
 
 ```powershell
-.\modman.exe combine "$env:PROGRAMFILES(X86)\Steam\steamapps\common\Project Wingman\ProjectWingman\Content\Paks\~mods\*.pak" --output C:\modman\out
+.\modman.exe combine "${env:ProgramFiles(x86)}\Steam\steamapps\common\Project Wingman\ProjectWingman\Content\Paks\~mods\*.pak" --output C:\modman\out
 ```
 
 What each part means:
@@ -150,7 +150,7 @@ double-click it instead of typing:
 
 ```bat
 @echo off
-modman.exe combine "%~dp0..\..\Steam\steamapps\common\Project Wingman\ProjectWingman\Content\Paks\~mods\*.pak" --output "%~dp0out"
+modman.exe combine "%ProgramFiles(x86)%\Steam\steamapps\common\Project Wingman\ProjectWingman\Content\Paks\~mods\*.pak" --output "%~dp0out"
 pause
 ```
 

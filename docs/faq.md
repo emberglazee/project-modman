@@ -3,9 +3,10 @@
 ## General
 
 **Does modman touch my game install?**
-No. Every command in this tool is read-only with respect to your game. It *reads* the
-game's pak (and `~mods` when building) to know the original content, and writes its
-output wherever `--output` points. You install the result yourself.
+Not unless you ask it to. Every command reads the game's pak (and `~mods` when
+building) and writes only where `--output` points. The desktop app's Install button
+is the one exception: it copies the merged pak into `~mods` and keeps a timestamped
+backup of whatever it replaces.
 
 **Where is my game's data pak?**
 `…/steamapps/common/Project Wingman/ProjectWingman/Content/Paks/pakchunk0-WindowsNoEditor.pak`
@@ -92,7 +93,7 @@ network requests after it loads, and the offline `modman-merge.html` works with 
 network at all.
 
 **Why is it so large for a web page?**
-The merge engine is embedded (~1.3 MB single file). It runs the same code as the
+The merge engine is embedded (~0.55 MB single file). It runs the same code as the
 command-line tool, byte for byte, which the project's test suite checks.
 
 ## Credits
