@@ -1948,6 +1948,32 @@ pub struct CombineRun {
     pub skipped: Vec<String>,
 }
 
+/// A merge's findings without an output path or file bytes. `probe` returns
+/// this so a frontend can show conflicts before writing anything; `files` is
+/// the total output-file count, matching [`CombineRun::files`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CombineReport {
+    pub merged: usize,
+    pub files: usize,
+    pub order: Vec<String>,
+    pub field_conflicts: Vec<String>,
+    pub pass_through_conflicts: Vec<String>,
+    pub warnings: Vec<String>,
+    pub skipped: Vec<String>,
+}
+
+fn report_from_outcome(outcome: &CombineOutcome, order: Vec<String>) -> CombineReport {
+    CombineReport {
+        merged: outcome.merged,
+        files: outcome.files.len() + outcome.pass_through.len(),
+        order,
+        field_conflicts: outcome.field_conflicts.clone(),
+        pass_through_conflicts: outcome.pass_through_conflicts.clone(),
+        warnings: outcome.warnings.clone(),
+        skipped: outcome.skipped.clone(),
+    }
+}
+
 /// A [`PakSource`] over a `.pak` file on disk. Public because every frontend
 /// needs it: `combine` uses it internally, and the audio/locres readers take a
 /// `PakSource` too.
@@ -2106,6 +2132,22 @@ mod combine_options_tests {
             name
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn report_counts_match_the_outcome() {
+        let mut outcome = CombineOutcome::default();
+        outcome.merged = 2;
+        outcome.files.insert("a".to_string(), vec![1]);
+        outcome
+            .pass_through
+            .push(("b".to_string(), 0, "b".to_string()));
+        outcome.field_conflicts.push("x".to_string());
+        let report = report_from_outcome(&outcome, vec!["m".to_string()]);
+        assert_eq!(report.merged, 2);
+        assert_eq!(report.files, 2);
+        assert_eq!(report.order, vec!["m".to_string()]);
+        assert_eq!(report.field_conflicts, vec!["x".to_string()]);
     }
 
     #[test]
