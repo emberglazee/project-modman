@@ -162,7 +162,10 @@ fn write_fstring(out: &mut Vec<u8>, s: &str) {
         out.extend_from_slice(s.as_bytes());
         out.push(0);
     } else {
-        out.extend_from_slice(&(-((s.chars().count() + 1) as i32)).to_le_bytes());
+        // UE counts UTF-16 code units, not chars: an astral character is one
+        // `char` but two units, and the length prefix must match the body.
+        let units = s.encode_utf16().count() + 1;
+        out.extend_from_slice(&(-(units as i32)).to_le_bytes());
         for c in s.encode_utf16() {
             out.extend_from_slice(&c.to_le_bytes());
         }
@@ -176,7 +179,7 @@ fn fstring_size(s: &str) -> usize {
     } else if s.is_ascii() {
         4 + s.len() + 1
     } else {
-        4 + s.chars().count() * 2 + 2
+        4 + s.encode_utf16().count() * 2 + 2
     }
 }
 
@@ -256,6 +259,20 @@ impl LocresFile {
                 r.off,
                 d.len()
             )));
+        }
+
+        // Every key must point at a string that exists. `patch_from_csv` writes
+        // by index, so a forged or corrupt index would otherwise panic there.
+        for ns in &namespaces {
+            for k in &ns.keys {
+                if k.string_index as usize >= strings.len() {
+                    return Err(LocresError::Structure(format!(
+                        "string index {} out of range ({} strings)",
+                        k.string_index,
+                        strings.len()
+                    )));
+                }
+            }
         }
 
         Ok(LocresFile {
@@ -424,13 +441,13 @@ impl LocresFile {
                 };
                 if let Some(tr) = map.get(&composite) {
                     if !tr.is_empty() {
-                        let existing = self
-                            .strings
-                            .get(k.string_index as usize)
-                            .map(|s| s.as_str())
-                            .unwrap_or("");
-                        if existing != tr.as_str() {
-                            new_strings[k.string_index as usize] = tr.clone();
+                        // `parse` rejects out-of-range indices; this guard keeps
+                        // a hand-built LocresFile from panicking here too.
+                        let Some(slot) = new_strings.get_mut(k.string_index as usize) else {
+                            continue;
+                        };
+                        if slot.as_str() != tr.as_str() {
+                            *slot = tr.clone();
                             patched += 1;
                         }
                     }
@@ -594,6 +611,49 @@ mod tests {
         assert_eq!(parsed.strings[1], "Сбить подкрепление Федерации");
         assert_eq!(parsed.strings[2], "日本語テキスト");
         assert_eq!(parsed.write(), bytes);
+    }
+
+    #[test]
+    fn astral_strings_round_trip() {
+        let mut f = sample();
+        f.strings[1] = "😀".into();
+        f.strings[2] = "a😀b".into();
+        let bytes = f.write();
+        let parsed = LocresFile::parse(&bytes).expect("parse");
+        assert_eq!(parsed.strings[1], "😀");
+        assert_eq!(parsed.strings[2], "a😀b");
+        assert_eq!(parsed.write(), bytes, "round trip must be byte-identical");
+    }
+
+    #[test]
+    fn astral_names_and_keys_round_trip() {
+        let mut f = sample();
+        f.namespaces[1].name = "😀".into();
+        f.namespaces[0].keys[0].key = "😀".into();
+        let bytes = f.write();
+        let parsed = LocresFile::parse(&bytes).expect("parse");
+        assert_eq!(parsed.namespaces[1].name, "😀");
+        assert_eq!(parsed.namespaces[0].keys[0].key, "😀");
+        assert_eq!(parsed.write(), bytes);
+    }
+
+    #[test]
+    fn out_of_range_string_index_is_rejected() {
+        let mut f = sample();
+        f.namespaces[0].keys[0].string_index = 5;
+        let bytes = f.write();
+        assert!(matches!(
+            LocresFile::parse(&bytes),
+            Err(LocresError::Structure(_))
+        ));
+    }
+
+    #[test]
+    fn patch_from_csv_does_not_panic_on_a_hand_built_index() {
+        let mut f = sample();
+        f.namespaces[0].keys[0].string_index = 5;
+        let n = f.patch_from_csv("AABBCCDDEEFF00112233445566778899,src,new\n");
+        assert_eq!(n, 0);
     }
 
     #[test]
