@@ -1,133 +1,106 @@
 # Changelog
 
-## [v0.5.2] — 2026-10-28
+## [v0.6.0] — 2026-10-28
 
-**A mod archive can no longer write outside the folder it is extracted into.**
-The 7z library modman shipped with is abandoned, and every version of it, 0.6.1
-included, joins each entry name onto the extraction path without checking it, so
-an entry called `../x` or an absolute path lands wherever the archive's author
-chose.
+**A mod archive can no longer write outside its extraction folder.** Every
+version of the 7z library modman shipped, 0.6.1 included, joins entry names
+unchecked, so `../x` or an absolute path lands wherever the archive's author
+chose. The minor number is for the removed `modman pack --compression` flag.
 
 ### Security
 - 7z extraction moved to [`sevenz-rust2`](https://crates.io/crates/sevenz-rust2),
-  the maintained successor. It validates every entry name before writing and
-  refuses the archive when one escapes, with `unsafe entry path escapes
-  destination: <path>`. The crate it replaces carries two advisories:
-  RUSTSEC-2026-0245 (CWE-23/CWE-36, no patched version exists) and
-  RUSTSEC-2026-0246 (unmaintained, the repository is deleted).
-- Proven on a real archive instead of taken from the advisory text: a 7z whose
-  entry is an absolute path used to be extracted, and the file appeared outside
-  the destination while the window reported only "no .pak files inside the
-  archive". It is now refused with nothing written. The zip branch already used
-  the `zip` crate's own path check and RAR already validated each name, so 7z was
-  the only hole.
-- Extraction is otherwise unchanged: all nine `.7z` archives in the mod corpus
-  (18 files across the download and corpus folders) unpack to the same file list
-  and the same SHA-256 per file under both libraries, and a merged pak built
-  from a 7z mod keeps its hash.
-- A malformed `.locres` file can no longer crash the parser. Three shapes did:
-  an FString length of `i32::MIN` overflowed the negation, and on the 32-bit
-  wasm build the doubled byte count wrapped to zero, so the bounds check passed
-  and the slice panicked, which reaches the browser page as a bare `unreachable`
-  trap that the page reports as running out of memory; the fixed-width header
-  reads indexed the buffer without checking it, so a file cut short anywhere
-  past the 25-byte header panicked; and a forged count went straight into
+  which validates every entry name and refuses an escaping archive with
+  `unsafe entry path escapes destination: <path>`. The crate it replaces carries
+  RUSTSEC-2026-0245 (CWE-23/CWE-36, no patched version) and RUSTSEC-2026-0246
+  (unmaintained, repository deleted). Proven on a real archive: an absolute-path
+  entry used to be extracted, and the file appeared outside the destination
+  while the window said only "no .pak files inside the archive"; it is now
+  refused with nothing written. Zip already used the `zip` crate's path check
+  and RAR validated each name, so 7z was the only hole.
+- Otherwise extraction is unchanged: the nine `.7z` archives in the mod corpus
+  (18 files) unpack to the same file list and per-file SHA-256 under both
+  libraries, and a merged pak built from a 7z mod keeps its hash.
+- A malformed `.locres` can no longer crash the parser. Three shapes did: an
+  FString length of `i32::MIN` overflowed the negation, and on 32-bit wasm the
+  doubled byte count wrapped to zero so the check passed and the slice panicked,
+  which the page reports as out of memory; unchecked fixed-width header reads
+  panicked on any file cut past 25 bytes; and a forged count went into
   `Vec::with_capacity`, where a 33-byte file claiming `u32::MAX` namespaces
-  asked for 240 GB and aborted the process, release build included. Reading now
-  goes through one bounds-checked reader, lengths widen before they are negated,
-  and capacities are clamped to what the remaining bytes could hold. Reproduced
-  before and after on real artifacts: the `i32::MIN` file traps `unreachable` in
-  the wasm module before the change and throws
-  `truncated locres: fstring utf16 body` after it, the 240 GB abort becomes
-  `truncated locres: namespace hash`, and every prefix of a valid file is now a
-  clean error. The nine shipped language files still parse and write back
+  asked for 240 GB and aborted a release build. Reading now goes through one
+  bounds-checked reader, lengths widen before negation, and capacities clamp to
+  the bytes remaining. On real artifacts the `i32::MIN` file trapped
+  `unreachable` before and throws `truncated locres: fstring utf16 body` now,
+  the 240 GB abort is `truncated locres: namespace hash`, and every prefix of a
+  valid file is a clean error. The nine shipped language files still round-trip
   byte-identically.
 
 ### Changed
-- Archive and support crates are current: `zip` 9.0.5 to 9.1.2, `rars` 0.11 to
-  0.12.2 (still read-only, the writer stays out of the binary), and `typed-path`
-  0.12.4 to 0.13.0, which arrives through `zip`. The GUI and wasm manifests name
-  the releases already in the lock (`eframe` 0.37.0, `rfd` 0.17.2,
-  `wasm-bindgen` 0.2.129, `js-sys` 0.3.106) where they used to carry bare minor
-  numbers; Cargo resolves the same versions either way, because the lock is what
-  pins them. `cargo audit` reports no vulnerabilities and no unmaintained
-  crates. The yanked `clipboard-win` it flagged is gone too, see Fixed below.
-- The dependency update leaves the command line build alone: it keeps its 0.5.1
-  size (3,287,448 bytes), because every bumped crate is reachable only from the
-  GUI. The Linux amd64 desktop app goes from 10,892,688 bytes in 0.5.1 to
-  11,096,536 (10.89 MB to 11.10 MB), the cost of the newer extractors. Clipboard
-  support later costs another 1,197,816 bytes, see Fixed below.
+- Archive crates are current: `zip` 9.0.5 to 9.1.2, `rars` 0.11 to 0.12.2
+  (still read-only), `typed-path` 0.12.4 to 0.13.0 through `zip`, and the GUI
+  and wasm manifests name the releases already in the lock (`eframe` 0.37.0,
+  `rfd` 0.17.2, `wasm-bindgen` 0.2.129, `js-sys` 0.3.106) instead of bare minor
+  numbers; Cargo resolves the same versions either way, the lock pins them.
+  `cargo audit` is clean, and the yanked `clipboard-win` is gone (see Fixed).
+- The dependency update leaves the CLI alone: it keeps its 0.5.1 size
+  (3,287,448 bytes), because every bumped crate is GUI-only. The Linux amd64 GUI
+  goes from 10,892,688 bytes to 11,096,536 (10.89 to 11.10 MB), the cost of the
+  newer extractors. Clipboard support later costs 1,197,816 bytes (see Fixed).
 - No measurable speed change. Paired, interleaved runs of 0.5.1 against the
   dependency-update build on the GUI merge path stay inside the run-to-run
-  spread of a merge that packs on six threads (the box sat at load ~9 while
-  measuring): CPU moved by -1.4% over three paired runs on six paks, +9.7% over
-  three on a 20 MB zip, and +1.8% on a single paired run over the 29-pak set,
-  all inside the +/-10% spread identical runs show. Peak memory is flat, at
-  195 MB (six paks), 158 to 159 MB (a 20 MB zip) and 225 MB (the 29-pak set),
-  and the merged output is byte-identical.
+  spread of a six-thread packer (load ~9): CPU moved by -1.4% on six paks, +9.7%
+  on a 20 MB zip and +1.8% on the 29-pak set, inside the +/-10% spread identical
+  runs show. Peak memory is flat at 195 MB, 158 to 159 MB and 225 MB for those
+  sets, and the merged output is byte-identical.
 
 ### Removed
-- `modman pack --compression zlib|gzip|zstd|lz4` is gone, and with it the
-  decompression support it required. Nothing in this game's ecosystem ships a
-  compressed pak: all 134 paks measured (the 17.5 GB base archive, the mod
-  corpus, the 29-addon set and `~mods`) report no compression at all, and
-  Project Wingman is UE 4.27 with Oodle, so the game's own toolchain never
-  produced one either. A compressed entry in some future pak fails with repak's
-  `compression` error, the same way Oodle already did, instead of half-working.
-- Removing it drops `zstd`, `zstd-safe`, `zstd-sys`, `lz4_flex` and
-  `twox-hash` from the dependency tree. Those carried three RUSTSEC-2026
-  advisories in the zstd stack: 0391 against `zstd` 0.13.3, and 0398 and 0403
-  against `zstd-safe` 7.3.0. No fixed 0.13 or 7.x release exists (the fixes are
-  `zstd` 0.14.3 and `zstd-safe` 8.2.0), and a `[patch]` cannot bridge a `^0.13`
-  requirement to 0.14. `zstd-safe` also carried ten unsound warnings. `cargo
-  audit` reports all of it. The advisories were assigned in the database on
-  2026-10-26, the same day the crate bumps above were written, which is why that
-  bullet could still say the audit was clean. It is clean again now, apart from
-  the yanked `clipboard-win`.
-- What it was costing: the command line binary goes from 3,287,448 bytes to
-  2,153,168, the wasm module from 674,866 to 373,235, and the offline single-file
-  page from 949,904 to 549,539. The merged output is unchanged: the 29-pak set
-  hashes `555dca0d12d2ac24…` at 4,607,949,935 bytes on both builds, a GUI run of
-  the Nimble NPCs `.7z` still produces `534a8e19…` (77,324 bytes), and the wasm
-  merge of four mod paks matches the CLI byte for byte (`101ce6d6…`, 88,193
-  bytes).
+- `modman pack --compression zlib|gzip|zstd|lz4` is gone, with the decompression
+  support it required. Nothing in this game's ecosystem ships a compressed pak:
+  all 134 measured (the 17.5 GB base archive, the mod corpus, the 29-addon set
+  and `~mods`) report none, and PW is UE 4.27 with Oodle, so the game's own
+  toolchain never produced one. A future compressed entry fails with repak's
+  `compression` error, as Oodle already did, instead of half-working.
+- Removing it drops `zstd`, `zstd-safe`, `zstd-sys`, `lz4_flex` and `twox-hash`.
+  Those carried three RUSTSEC-2026 advisories in the zstd stack: 0391 against
+  `zstd` 0.13.3, and 0398 and 0403 against `zstd-safe` 7.3.0. No fixed 0.13 or
+  7.x release exists (the fixes are `zstd` 0.14.3 and `zstd-safe` 8.2.0), and a
+  `[patch]` cannot bridge `^0.13` to 0.14. `zstd-safe` also carried ten unsound
+  warnings. The advisories were assigned on 2026-10-26, the same day as the
+  bumps above, which is why that bullet could still call the audit clean; it is
+  clean now apart from the yanked `clipboard-win`.
+- What it was costing: the CLI goes from 3,287,448 bytes to 2,153,168, the wasm
+  module from 674,866 to 373,235, and the single-file page from 949,904 to
+  549,539. Output is unchanged: the 29-pak set hashes `555dca0d12d2ac24…` at
+  4,607,949,935 bytes on both builds, a GUI run of the Nimble NPCs `.7z` still
+  produces `534a8e19…` (77,324 bytes), and the wasm merge of four mod paks
+  matches the CLI byte for byte (`101ce6d6…`, 88,193 bytes).
 
 ### Fixed
-- Copy and paste work in the desktop app. `eframe` is built with
-  `default-features = false`, and the feature list did not include `clipboard`,
-  so egui's clipboard backend was compiled out entirely: Ctrl+C on the log pane
-  or a path field did nothing, and nothing said so. The feature is on now, which
-  brings `arboard` and costs 1,197,816 bytes on the Linux GUI (10,654,176 to
-  11,851,992). The command line build is untouched, and its checksums are
-  unchanged.
-- `clipboard-win` moves from 5.4.1 to 5.4.3, the first release of that crate
-  that crates.io has not withdrawn (5.2.0 through 5.4.1 are all yanked, which is
-  what `cargo audit` was reporting). It is a Windows-only dependency of
-  `arboard`, and `cargo check --target x86_64-pc-windows-gnu -p modman-gui`
-  compiles it. With that, `cargo audit` has no findings and no warnings left.
+- Copy and paste work in the desktop app. `eframe`, built with
+  `default-features = false`, did not list `clipboard`, so egui's clipboard
+  backend was compiled out and Ctrl+C on the log pane or a path field did
+  nothing, silently. The feature is on, bringing `arboard` and costing 1,197,816
+  bytes on the Linux GUI (10,654,176 to 11,851,992); the CLI is untouched and
+  its checksums unchanged. `clipboard-win` moves from 5.4.1 to 5.4.3, the first
+  release crates.io has not withdrawn (5.2.0 through 5.4.1 are yanked); it is a
+  Windows-only dependency of `arboard`, and `cargo check --target
+  x86_64-pc-windows-gnu -p modman-gui` compiles it. `cargo audit` has no
+  findings or warnings left.
 - The browser page handed a finished merge's memory to the JavaScript garbage
-  collector, which is not obliged to run. Measured against the shipped wasm in
-  Chrome: twelve 64 MB sessions with no explicit `free()` climbed linearly to
-  807 MB and reclaimed nothing, while the same loop with `free()` stayed flat at
-  65 MB. The merge session is now freed in a `finally` block, so a retry starts
-  from the previous run's high-water mark instead of waiting on collector
-  timing. No user-visible failure was reproduced on the page itself: two merges
-  of the same five-mod, 634 MB set back to back both peaked at 2,690 MB in
-  either version, because reading each mod pak allocates a large array in the
-  JavaScript heap and that pressure is what makes the collector run. The change
-  removes the dependence on that timing. Output is untouched: the merged bytes
-  are copied into the JavaScript heap before the session is freed, and the same
-  inputs hash identically before and after. Both script tags move to `?v=0.5.2`
-  in the same change: this is the first edit to `web/app.js` since 0.5.0, and
-  without the bump a returning visitor would run the cached copy and see none of
-  it. The page now appends that same query to the `.wasm` it fetches, read from
-  its own script tag, so a new page cannot pair with a module cached from the
-  previous build and the version still lives in one place.
+  collector, which is not obliged to run. In Chrome, twelve 64 MB sessions
+  without `free()` climbed to 807 MB and reclaimed nothing, while the same loop
+  with `free()` stayed flat at 65 MB. The session is now freed in a `finally`
+  block, so a retry starts from the previous high-water mark. No user-visible
+  failure was reproduced: two back-to-back merges of a five-mod, 634 MB set peak
+  at 2,690 MB either way, because reading each mod pak allocates a large
+  JavaScript array and that pressure makes the collector run. Output is
+  untouched and the same inputs hash identically. Both script tags move to
+  `?v=0.6.0` (the first `web/app.js` edit since 0.5.0), and the page appends
+  that query to the `.wasm` it fetches, so a new page cannot pair with a cached
+  module.
 - Running out of memory while loading a mod pak now reports as running out of
-  memory. That failure arrives as `could not load <file> as a pak: unreachable`,
-  and the `unreachable` pattern in the error classifier was anchored to the
-  start and end of the message, so the wrapped form fell through to the generic
-  "The merge stopped" text.
+  memory. The failure arrives as `could not load <file> as a pak: unreachable`,
+  and the `unreachable` pattern was anchored to the start and end of the
+  message, so the wrapped form fell through to "The merge stopped".
 
 ## [v0.5.1] — 2026-10-25
 
