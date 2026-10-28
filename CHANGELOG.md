@@ -30,9 +30,8 @@ chose.
   0.12.2 (still read-only, the writer stays out of the binary), `typed-path` 0.13
   through `repak`, and exact pins for `eframe`, `rfd` and the wasm crates in
   place of loose ranges. `cargo audit` reports no vulnerabilities and no
-  unmaintained crates; the single remaining warning is a yanked
-  `clipboard-win 5.4.1`, Windows clipboard support inside egui, which is not a
-  security issue.
+  unmaintained crates. The yanked `clipboard-win` it flagged is gone too, see
+  Fixed below.
 - Only the desktop app changes: Linux amd64 goes from 10.89 MB in 0.5.1 to
   11.13 MB, the cost of the path-checking extractor. The command line build is
   unchanged, because every bumped crate is reachable only from the GUI.
@@ -64,6 +63,18 @@ chose.
   browser merge of a two-pak set hashes `4075fc25ab5ec47a…` on both builds.
 
 ### Fixed
+- Copy and paste work in the desktop app. `eframe` is built with
+  `default-features = false`, and the feature list did not include `clipboard`,
+  so egui's clipboard backend was compiled out entirely: Ctrl+C on the log pane
+  or a path field did nothing, and nothing said so. The feature is on now, which
+  brings `arboard` and costs 1,198,416 bytes on the Linux GUI (10,655,976 to
+  11,854,392). The command line build is untouched, and its checksums are
+  unchanged.
+- `clipboard-win` moves from 5.4.1 to 5.4.3, the first release of that crate
+  that crates.io has not withdrawn (5.2.0 through 5.4.1 are all yanked, which is
+  what `cargo audit` was reporting). It is a Windows-only dependency of
+  `arboard`, and `cargo check --target x86_64-pc-windows-gnu -p modman-gui`
+  compiles it. With that, `cargo audit` has no findings and no warnings left.
 - The browser page handed a finished merge's memory to the JavaScript garbage
   collector, which is not obliged to run. Measured against the shipped wasm in
   Chrome: twelve 64 MB sessions with no explicit `free()` climbed linearly to

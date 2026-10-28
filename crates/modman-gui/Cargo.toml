@@ -13,8 +13,10 @@ modman-pak = { path = "../modman-pak" }
 
 # egui rather than a webview: no browser engine, no system toolkit, one binary.
 # x11 + wayland are not implied once default-features is off: without them
-# winit has no platform and fails with "platform ... not supported".
-eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+# winit has no platform and fails with "platform ... not supported". "clipboard"
+# is off in that same default set, and leaving it off compiles the clipboard
+# backend out entirely, so Ctrl+C on the merge report does nothing.
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "x11", "wayland", "clipboard"] }
 rfd = "0.17.2"
 
 # Archive extraction, all pure Rust so nothing has to be installed or bundled.
