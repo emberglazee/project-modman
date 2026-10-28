@@ -63,7 +63,7 @@ chose.
   measuring): CPU moved by -1.4% over three paired runs on six paks, +9.7% over
   three on a 20 MB zip, and +1.8% on a single paired run over the 29-pak set,
   all inside the +/-10% spread identical runs show. Peak memory is flat, at
-  195 MB (six paks), 158 to 159 MB (a 20 MB zip) and 226 MB (the 29-pak set),
+  195 MB (six paks), 158 to 159 MB (a 20 MB zip) and 225 MB (the 29-pak set),
   and the merged output is byte-identical.
 
 ### Removed
