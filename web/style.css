@@ -158,3 +158,49 @@ footer {
 }
 footer a { color: var(--accent); text-decoration: none; }
 footer a:hover { text-decoration: underline; }
+
+.filelist li.modrow {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+}
+.filelist .drag { cursor: grab; color: var(--dim); user-select: none; }
+.filelist .idx { color: var(--dim); min-width: 2.2em; text-align: right; }
+.filelist .fname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filelist .rowbtns { display: flex; gap: 4px; }
+.iconbtn {
+  background: #2a3342;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 7px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.iconbtn:hover { background: #354052; }
+.iconbtn:disabled { opacity: .35; cursor: default; }
+.filelist li.wins { outline: 1px solid var(--ok); }
+.badge { color: var(--ok); font-size: 11px; font-weight: 600; }
+
+.orderbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+.orderbar label { cursor: pointer; color: var(--dim); }
+.orderbar input { accent-color: var(--accent); }
+
+.probe {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card2);
+}
+.probe h4 { margin: 10px 0 4px; font-size: 13px; color: var(--warn); }
+.probe .hint { margin: 4px 0 0; }
+.proberow { display: flex; align-items: baseline; gap: 10px; }

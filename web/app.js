@@ -14,6 +14,11 @@ const gameFileEl = $('gameFile');
 const gameDrop = $('gameDrop');
 const gameInfo = $('gameInfo');
 const mergeBtn = $('mergeBtn');
+const checkNowBtn = $('checkNowBtn');
+const probeCard = $('probeCard');
+const probeBody = $('probeBody');
+const probeStatusEl = $('probeStatus');
+const orderHint = $('orderHint');
 const progress = $('progress');
 const progressFill = $('progressFill');
 const statusEl = $('status');
@@ -24,9 +29,18 @@ const reportEl = $('report');
 const downloadBtn = $('downloadBtn');
 
 let wasmReady = false;
-let modFiles = [];   // File[]
-let gameFile = null; // File
+let modEntries = [];   // { file, id, sessionIndex }
+let nextModId = 1;
+let direction = 'last'; // 'last' = later wins, 'first' = earlier wins
+let gameFile = null;    // File
 let resultPak = null;
+let mergeSession = null;
+let sessionKey = null;
+let probeGeneration = 0;
+let probeTimer = null;
+let probeTask = null;
+let probeBusy = false;
+let merging = false;
 
 const fmtBytes = (n) => {
   if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(2) + ' GB';
@@ -41,32 +55,150 @@ function setError(msg) {
 }
 
 function refreshUi() {
-  mergeBtn.disabled = !(wasmReady && modFiles.length > 0 && gameFile);
-  mergeBtn.textContent = modFiles.length
-    ? `Merge ${modFiles.length} mod pak${modFiles.length > 1 ? 's' : ''}`
+  const count = modEntries.length;
+  mergeBtn.disabled = !(wasmReady && count > 0 && gameFile) || merging;
+  mergeBtn.textContent = count
+    ? `Merge ${count} mod pak${count > 1 ? 's' : ''}`
     : 'Merge mods';
+  if (checkNowBtn) {
+    checkNowBtn.disabled = !(wasmReady && count > 0 && gameFile) || merging;
+  }
+}
+
+function updateOrderHint() {
+  if (!orderHint) return;
+  orderHint.textContent =
+    direction === 'last'
+      ? 'Applied top to bottom. Later entries win.'
+      : 'Applied bottom to top. Earlier entries win.';
 }
 
 function renderModList() {
   modList.innerHTML = '';
-  const sorted = [...modFiles].sort((a, b) => a.name.localeCompare(b.name));
-  for (const f of sorted) {
+  const last = modEntries.length - 1;
+  modEntries.forEach((entry, i) => {
+    const f = entry.file;
+    const wins =
+      modEntries.length > 1 &&
+      ((direction === 'last' && i === last) || (direction === 'first' && i === 0));
     const li = document.createElement('li');
-    li.innerHTML = `<span class="fname">${f.name}</span><span class="fsize">${fmtBytes(f.size)}</span>`;
+    li.className = wins ? 'modrow wins' : 'modrow';
+    li.draggable = true;
+    li.dataset.index = String(i);
+    li.innerHTML = `<span class="drag" title="Drag to reorder">⠿</span>
+      <span class="idx">${i + 1}.</span>
+      <span class="fname">${escapeHtml(f.name)}</span>
+      <span class="fsize">${fmtBytes(f.size)}</span>
+      ${wins ? '<span class="badge">wins</span>' : ''}
+      <span class="rowbtns">
+        <button class="iconbtn" data-action="up" ${i === 0 ? 'disabled' : ''} title="Move up">↑</button>
+        <button class="iconbtn" data-action="down" ${i === last ? 'disabled' : ''} title="Move down">↓</button>
+        <button class="iconbtn" data-action="remove" title="Remove">✕</button>
+      </span>`;
     modList.appendChild(li);
+  });
+  updateOrderHint();
+}
+
+function applicationEntries() {
+  return direction === 'last' ? modEntries : [...modEntries].reverse();
+}
+
+function applicationIndices() {
+  return applicationEntries().map((entry) => entry.sessionIndex);
+}
+
+function moveEntry(from, to) {
+  if (from === to || from < 0 || to < 0 || from >= modEntries.length || to >= modEntries.length) {
+    return;
   }
+  const [entry] = modEntries.splice(from, 1);
+  modEntries.splice(to, 0, entry);
+  renderModList();
+  scheduleProbe();
+}
+
+function removeEntry(index) {
+  if (index < 0 || index >= modEntries.length) return;
+  modEntries.splice(index, 1);
+  renderModList();
+  refreshUi();
+  sessionKey = null;
+  scheduleProbe();
 }
 
 // ── File picking ──────────────────────────────────────────────────────────
 
 function addModFiles(files) {
   const incoming = [...files].filter((f) => f.name.toLowerCase().endsWith('.pak'));
+  let added = false;
   for (const f of incoming) {
-    if (!modFiles.some((m) => m.name === f.name && m.size === f.size)) modFiles.push(f);
+    if (!modEntries.some((m) => m.file.name === f.name && m.file.size === f.size)) {
+      modEntries.push({ file: f, id: nextModId++, sessionIndex: -1 });
+      added = true;
+    }
   }
-  renderModList();
-  refreshUi();
+  if (added) {
+    renderModList();
+    refreshUi();
+    sessionKey = null;
+    scheduleProbe();
+  }
 }
+
+modList.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-action]');
+  if (!button) return;
+  const row = event.target.closest('li[data-index]');
+  if (!row) return;
+  const index = Number(row.dataset.index);
+  if (button.dataset.action === 'up') moveEntry(index, index - 1);
+  else if (button.dataset.action === 'down') moveEntry(index, index + 1);
+  else if (button.dataset.action === 'remove') removeEntry(index);
+});
+
+let dragFrom = null;
+modList.addEventListener('dragstart', (event) => {
+  if (event.target.closest('button')) {
+    event.preventDefault();
+    return;
+  }
+  const row = event.target.closest('li[data-index]');
+  if (!row) return;
+  dragFrom = Number(row.dataset.index);
+  event.dataTransfer.effectAllowed = 'move';
+  try {
+    event.dataTransfer.setData('text/plain', String(dragFrom));
+  } catch (e) {
+    // Some browsers restrict setData; the in-page dragFrom is enough.
+  }
+});
+modList.addEventListener('dragover', (event) => {
+  if (dragFrom === null) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+});
+modList.addEventListener('drop', (event) => {
+  if (dragFrom === null) return;
+  event.preventDefault();
+  const row = event.target.closest('li[data-index]');
+  if (row) moveEntry(dragFrom, Number(row.dataset.index));
+  dragFrom = null;
+});
+modList.addEventListener('dragend', () => {
+  dragFrom = null;
+});
+
+for (const radio of document.querySelectorAll('input[name="priority"]')) {
+  radio.addEventListener('change', () => {
+    if (!radio.checked) return;
+    direction = radio.value;
+    renderModList();
+    scheduleProbe();
+  });
+}
+
+checkNowBtn?.addEventListener('click', () => scheduleProbe(0));
 
 modFilesEl.addEventListener('change', () => addModFiles(modFilesEl.files));
 
@@ -104,7 +236,7 @@ let lastRun = null;
 function newRunRecord() {
   return {
     startedAt: new Date().toISOString(),
-    mods: modFiles.map((f) => ({ name: f.name, size: f.size })),
+    mods: modEntries.map((e) => ({ name: e.file.name, size: e.file.size })),
     game: gameFile ? { name: gameFile.name, size: gameFile.size } : null,
     steps: 0,
     needs: 0,
@@ -267,6 +399,155 @@ function showError(e) {
 
 const MAX_STEPS = 100_000;
 
+// ── Conflict probe ────────────────────────────────────────────────────────
+// A probe runs the same core combine as the merge, with pass-through bytes
+// deferred, and never writes a pak. It shares one session with the merge so
+// the mod bytes and the game-pak ranges are read once; a reorder only changes
+// the application indices.
+
+function sessionKeyFor() {
+  const mods = modEntries
+    .map((e) => `${e.file.name}:${e.file.size}:${e.file.lastModified}`)
+    .sort()
+    .join('|');
+  return `${gameFile.name}:${gameFile.size}:${gameFile.lastModified}|${mods}`;
+}
+
+async function ensureSession(onStatus) {
+  const key = sessionKeyFor();
+  if (mergeSession && sessionKey === key) return mergeSession;
+  if (mergeSession) {
+    try {
+      mergeSession.free();
+    } catch (e) {
+      console.error('modman: freeing the previous session failed:', e);
+    }
+    mergeSession = null;
+    sessionKey = null;
+  }
+  const session = new wasm_bindgen.MergeSession();
+  try {
+    for (let i = 0; i < modEntries.length; i++) {
+      const entry = modEntries[i];
+      if (onStatus) onStatus(`Loading ${entry.file.name} (${fmtBytes(entry.file.size)})…`);
+      let bytes;
+      try {
+        bytes = new Uint8Array(await entry.file.arrayBuffer());
+      } catch (e) {
+        throw new Error(`could not read ${entry.file.name} from disk: ${(e && e.message) || e}`);
+      }
+      try {
+        session.add_mod(entry.file.name, bytes);
+      } catch (e) {
+        throw new Error(`could not load ${entry.file.name} as a pak: ${(e && e.message) || e}`);
+      }
+      entry.sessionIndex = i;
+    }
+    session.set_game_pak(gameFile.size);
+    const TAIL = 4 * 1024 * 1024;
+    const tailStart = Math.max(0, gameFile.size - TAIL);
+    session.provide(tailStart, await readRange(gameFile, tailStart, gameFile.size - tailStart));
+    mergeSession = session;
+    sessionKey = key;
+    return session;
+  } catch (e) {
+    try {
+      session.free();
+    } catch (err) {
+      console.error('modman: freeing the failed session failed:', err);
+    }
+    throw e;
+  }
+}
+
+function probeSay(text) {
+  if (probeStatusEl) probeStatusEl.textContent = text;
+}
+
+function scheduleProbe(delay = 400) {
+  if (!wasmReady || !gameFile || modEntries.length === 0 || merging) return;
+  probeGeneration += 1;
+  const generation = probeGeneration;
+  if (probeTimer) {
+    clearTimeout(probeTimer);
+    probeTimer = null;
+  }
+  probeTimer = setTimeout(() => {
+    probeTimer = null;
+    startProbe(generation);
+  }, delay);
+}
+
+function startProbe(generation) {
+  if (generation !== probeGeneration || merging) return;
+  if (probeBusy) {
+    probeTimer = setTimeout(() => startProbe(generation), 100);
+    return;
+  }
+  probeBusy = true;
+  if (probeCard) probeCard.hidden = false;
+  probeSay('Checking conflicts…');
+  probeTask = runProbe(generation).finally(() => {
+    probeBusy = false;
+    probeTask = null;
+  });
+}
+
+async function runProbe(generation) {
+  try {
+    const session = await ensureSession((text) => probeSay(text));
+    if (generation !== probeGeneration || merging) return;
+    session.set_order(new Uint32Array(applicationIndices()));
+    for (let step = 0; step < MAX_STEPS; step++) {
+      if (generation !== probeGeneration || merging) return;
+      const result = session.probe_step();
+      if (result.status === 'need') {
+        session.provide(result.offset, await readRange(gameFile, result.offset, result.length));
+        continue;
+      }
+      if (generation === probeGeneration) {
+        showProbe(JSON.parse(result.report));
+      }
+      return;
+    }
+    throw new Error(`step-limit: gave up after ${MAX_STEPS} reads from the game pak`);
+  } catch (e) {
+    if (generation === probeGeneration) {
+      showProbeError(String((e && e.message) || e));
+    }
+  }
+}
+
+function showProbe(report) {
+  if (!probeCard || !probeBody) return;
+  probeCard.hidden = false;
+  probeSay('Checked.');
+  const conflicts = report.conflicts || [];
+  const passThrough = report.passThroughConflicts || [];
+  const warnings = report.warnings || [];
+  let html = `<p class="hint">${report.merged} datatable(s), ${report.files} file(s): ${conflicts.length} field conflict(s), ${passThrough.length} file(s) that can't be combined, ${warnings.length} warning(s).</p>`;
+  const list = (title, items) => {
+    if (!items.length) return '';
+    return `<h4>${escapeHtml(title)} (${items.length})</h4><ul class="conflicts">${items
+      .map((item) => `<li>${escapeHtml(item)}</li>`)
+      .join('')}</ul>`;
+  };
+  html += list('Field conflicts', conflicts);
+  html += list("Files that can't be combined", passThrough);
+  html += list('Warnings', warnings);
+  if (!conflicts.length && !passThrough.length && !warnings.length) {
+    html += '<p class="ok">No conflicts detected.</p>';
+  }
+  probeBody.innerHTML = html;
+}
+
+function showProbeError(message) {
+  if (!probeCard || !probeBody) return;
+  probeCard.hidden = false;
+  probeSay('Check failed.');
+  probeBody.innerHTML = `<p class="warn">${escapeHtml(message)}</p>`;
+}
+
 async function runMerge() {
   setError('');
   resultCard.hidden = true;
@@ -275,12 +556,24 @@ async function runMerge() {
   resultPak = null;
   lastRun = newRunRecord();
   wasm_bindgen.clear_last_panic();
-  let bytesRead = 0;
-  let loadingMod = null;
+  merging = true;
+  probeGeneration += 1;
+  if (probeTimer) {
+    clearTimeout(probeTimer);
+    probeTimer = null;
+  }
+  const pendingProbe = probeTask;
   let session = null;
 
   try {
-    const totalModBytes = modFiles.reduce((a, f) => a + f.size, 0);
+    if (pendingProbe) {
+      try {
+        await pendingProbe;
+      } catch (e) {
+        // The probe loop reports its own errors; a merge still proceeds.
+      }
+    }
+    const totalModBytes = modEntries.reduce((a, e) => a + e.file.size, 0);
     // Measured: ~870 MB of mod paks already exhausts a Chromium tab during the
     // merge, because the set is held in memory twice (inputs, then output).
     if (totalModBytes > 1_500_000_000) {
@@ -289,32 +582,13 @@ async function runMerge() {
       );
     }
 
-    session = new wasm_bindgen.MergeSession();
-    const sorted = [...modFiles].sort((a, b) => a.name.localeCompare(b.name));
-    for (const f of sorted) {
-      loadingMod = f.name;
-      setStatus(`Loading ${f.name} (${fmtBytes(f.size)})…`, 0.02);
-      let bytes;
-      try {
-        bytes = new Uint8Array(await f.arrayBuffer());
-      } catch (e) {
-        throw new Error(`could not read ${f.name} from disk: ${(e && e.message) || e}`);
-      }
-      try {
-        session.add_mod(f.name, bytes);
-      } catch (e) {
-        throw new Error(`could not load ${f.name} as a pak: ${(e && e.message) || e}`);
-      }
-    }
-    loadingMod = null;
-    session.set_game_pak(gameFile.size);
+    session = await ensureSession((text) => setStatus(text, 0.02));
+    session.set_order(new Uint32Array(applicationIndices()));
 
-    // The pak index + footer live at the end of the file; grab a generous
-    // tail first, then let the session ask for anything else it needs.
+    // The pak index + footer live at the end of the file; ensureSession seeded
+    // the tail, and the step loop asks for anything else it needs.
     const TAIL = 4 * 1024 * 1024;
-    const tailStart = Math.max(0, gameFile.size - TAIL);
-    session.provide(tailStart, await readRange(gameFile, tailStart, gameFile.size - tailStart));
-    bytesRead += gameFile.size - tailStart;
+    let bytesRead = Math.min(TAIL, gameFile.size);
 
     const expected = gameFile.size;
     let lastRequest = '';
@@ -354,7 +628,6 @@ async function runMerge() {
     }
   } catch (e) {
     lastRun.error = String((e && e.message) || e);
-    if (loadingMod) lastRun.error = `while loading ${loadingMod}: ${lastRun.error}`;
     showError(e);
   } finally {
     // Free the session explicitly. It holds every mod pak and every game-pak
@@ -375,6 +648,9 @@ async function runMerge() {
       }
       session = null;
     }
+    mergeSession = null;
+    sessionKey = null;
+    merging = false;
     mergeBtn.disabled = false;
     refreshUi();
   }
@@ -385,8 +661,11 @@ function showReport(report) {
   resultCard.hidden = false;
 
   const skipped = new Set(report.skipped || []);
-  let html = '<h3>Merge order <span class="dim">(later entries win on conflicts)</span></h3><ol class="order">';
-  for (const label of report.order) {
+  let html = `<h3>Merge order <span class="dim">(as listed; ${
+    direction === 'last' ? 'later' : 'earlier'
+  } entries win on conflicts)</span></h3><ol class="order">`;
+  for (const entry of modEntries) {
+    const label = entry.file.name;
     html += skipped.has(label)
       ? `<li>${escapeHtml(label)} <span class="dim">(skipped: previous output)</span></li>`
       : `<li>${escapeHtml(label)}</li>`;

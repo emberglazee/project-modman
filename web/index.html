@@ -56,7 +56,17 @@
       <label class="btn secondary">Choose files…<input type="file" id="modFiles" accept=".pak" multiple hidden></label>
     </div>
     <ul class="filelist" id="modList"></ul>
-    <p class="hint">Merge order: paks are applied in filename order (later ones win conflicts, shown in the report).</p>
+    <div class="orderbar">
+      <span class="hint">Priority:</span>
+      <label><input type="radio" name="priority" value="last" checked> Later in the list wins</label>
+      <label><input type="radio" name="priority" value="first"> Earlier in the list wins</label>
+      <button class="btn secondary" id="checkNowBtn" disabled>Check now</button>
+    </div>
+    <p class="hint" id="orderHint">Applied top to bottom. Later entries win.</p>
+    <div class="probe" id="probeCard" hidden>
+      <div class="proberow"><strong>Conflicts</strong><span class="dim" id="probeStatus"></span></div>
+      <div id="probeBody"></div>
+    </div>
     <p class="hint">Browser memory is the practical limit: with aircraft-sized mods (~140 MB each), 4 merged fine and 6 ran out. About 500 MB of mod paks is a safe batch; past roughly 800 MB a tab gives up. If a set fails, merge it in batches or use the desktop build, which merged 29 of these in 17 seconds.</p>
   </section>
 
