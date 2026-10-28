@@ -6,9 +6,20 @@ use std::path::PathBuf;
 use crate::archive;
 use crate::job::Job;
 
+/// Which end of the display list is applied last and wins a conflict. The list
+/// itself never moves when this changes: `application_inputs` flips the order
+/// fed to the merger.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PriorityDirection {
+    #[default]
+    LaterWins,
+    EarlierWins,
+}
+
 pub struct MergeTab {
     pub inputs: Vec<PathBuf>,
     pub out_dir: PathBuf,
+    pub direction: PriorityDirection,
 }
 
 impl MergeTab {
@@ -16,6 +27,7 @@ impl MergeTab {
         Self {
             inputs: Vec::new(),
             out_dir,
+            direction: PriorityDirection::default(),
         }
     }
 
@@ -33,7 +45,27 @@ impl MergeTab {
                 self.inputs.push(p);
             }
         }
-        self.inputs.sort();
+    }
+
+    pub fn move_up(&mut self, index: usize) {
+        if index > 0 && index < self.inputs.len() {
+            self.inputs.swap(index - 1, index);
+        }
+    }
+
+    pub fn move_down(&mut self, index: usize) {
+        if index + 1 < self.inputs.len() {
+            self.inputs.swap(index, index + 1);
+        }
+    }
+
+    /// The order handed to the merger: the display list, or its reverse when
+    /// the earlier entry should win.
+    pub fn application_inputs(&self) -> Vec<PathBuf> {
+        match self.direction {
+            PriorityDirection::LaterWins => self.inputs.clone(),
+            PriorityDirection::EarlierWins => self.inputs.iter().rev().cloned().collect(),
+        }
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, game_paks: Option<&std::path::Path>) -> Option<Job> {
@@ -56,7 +88,12 @@ impl MergeTab {
             }
             if ui.button("Add a folder…").clicked() {
                 if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                    self.add_paths(archive::collect_paks(&dir));
+                    // A bulk folder import has no user order and read_dir
+                    // order is not stable; sort it before appending. Individual
+                    // files and drops keep the order they arrived in.
+                    let mut paks = archive::collect_paks(&dir);
+                    paks.sort();
+                    self.add_paths(paks);
                 }
             }
             if ui.button("Clear").clicked() {
@@ -102,11 +139,57 @@ impl MergeTab {
             if let Some(base_pak) = base_pak {
                 job = Some(Job::Merge {
                     base_pak,
-                    inputs: self.inputs.clone(),
+                    inputs: self.application_inputs(),
                     out_dir: self.out_dir.clone(),
                 });
             }
         }
         job
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tab(names: &[&str]) -> MergeTab {
+        let mut tab = MergeTab::new(PathBuf::from("/tmp"));
+        tab.inputs = names.iter().map(PathBuf::from).collect();
+        tab
+    }
+
+    #[test]
+    fn move_up_and_down_stop_at_the_ends() {
+        let mut tab = tab(&["a", "b", "c"]);
+        tab.move_up(0);
+        tab.move_down(2);
+        assert_eq!(
+            tab.inputs,
+            vec![PathBuf::from("a"), PathBuf::from("b"), PathBuf::from("c")]
+        );
+        tab.move_down(0);
+        assert_eq!(
+            tab.inputs,
+            vec![PathBuf::from("b"), PathBuf::from("a"), PathBuf::from("c")]
+        );
+        tab.move_up(2);
+        assert_eq!(
+            tab.inputs,
+            vec![PathBuf::from("b"), PathBuf::from("c"), PathBuf::from("a")]
+        );
+    }
+
+    #[test]
+    fn application_order_follows_the_direction() {
+        let mut tab = tab(&["a", "b", "c"]);
+        assert_eq!(
+            tab.application_inputs(),
+            vec![PathBuf::from("a"), PathBuf::from("b"), PathBuf::from("c")]
+        );
+        tab.direction = PriorityDirection::EarlierWins;
+        assert_eq!(
+            tab.application_inputs(),
+            vec![PathBuf::from("c"), PathBuf::from("b"), PathBuf::from("a")]
+        );
     }
 }
