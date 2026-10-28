@@ -24,6 +24,23 @@ chose.
 - Extraction is otherwise unchanged: all 18 `.7z` archives in the mod corpus
   unpack to the same file list and the same SHA-256 per file under both
   libraries, and a merged pak built from a 7z mod keeps its hash.
+- A malformed `.locres` file can no longer crash the parser. Three shapes did:
+  an FString length of `i32::MIN` overflowed the negation, and on the 32-bit
+  wasm build the doubled byte count wrapped to zero, so the bounds check passed
+  and the slice panicked, which reaches the browser page as a bare `unreachable`
+  trap that the page reports as running out of memory; the fixed-width header
+  reads indexed the buffer without checking it, so a file cut short anywhere
+  past the 25-byte header panicked; and a forged count went straight into
+  `Vec::with_capacity`, where a 33-byte file claiming `u32::MAX` namespaces
+  asked for 240 GB and aborted the process, release build included. Reading now
+  goes through one bounds-checked reader, lengths widen before they are negated,
+  and capacities are clamped to what the remaining bytes could hold. Reproduced
+  before and after on real artifacts: the `i32::MIN` file traps `unreachable` in
+  the wasm module before the change and throws
+  `truncated locres: fstring utf16 body` after it, the 240 GB abort becomes
+  `truncated locres: namespace hash`, and every prefix of a valid file is now a
+  clean error. The nine shipped language files still parse and write back
+  byte-identically.
 
 ### Changed
 - Archive and support crates are current: `zip` 9.0.5 to 9.1.2, `rars` 0.11 to

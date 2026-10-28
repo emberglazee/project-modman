@@ -82,37 +82,70 @@ pub struct LocresFile {
 
 // ── FString helpers (UE convention: positive len = UTF-8, negative = UTF-16) ──
 
-fn read_fstring(d: &[u8], off: &mut usize) -> Result<String, LocresError> {
-    if *off + 4 > d.len() {
-        return Err(LocresError::Truncated("fstring length"));
+/// Bounded little-endian reader over the file bytes.
+///
+/// A `.locres` can arrive malformed — a corrupt download, a hand-edited file —
+/// and `parse` has to return an error rather than panic or abort. Every read
+/// goes through a checked slice, and an FString length is widened before it is
+/// negated, because `i32::MIN` has no positive counterpart: `-len` overflows in
+/// debug and wraps in release, where on a 32-bit target (wasm) the `len * 2`
+/// byte count wrapped again to zero, slipped past the bounds check and panicked
+/// on the slice.
+struct Reader<'a> {
+    d: &'a [u8],
+    off: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn new(d: &'a [u8], off: usize) -> Self {
+        Self { d, off }
     }
-    let len = i32::from_le_bytes(d[*off..*off + 4].try_into().unwrap());
-    *off += 4;
-    if len == 0 {
-        return Ok(String::new());
+
+    /// Bytes left after the read cursor (0 once past the end).
+    fn remaining(&self) -> usize {
+        self.d.len().saturating_sub(self.off)
     }
-    if len > 0 {
-        let n = len as usize;
-        if *off + n > d.len() {
-            return Err(LocresError::Truncated("fstring body"));
+
+    fn take(&mut self, n: usize, what: &'static str) -> Result<&'a [u8], LocresError> {
+        let end = self
+            .off
+            .checked_add(n)
+            .ok_or(LocresError::Truncated(what))?;
+        let bytes = self
+            .d
+            .get(self.off..end)
+            .ok_or(LocresError::Truncated(what))?;
+        self.off = end;
+        Ok(bytes)
+    }
+
+    fn u32(&mut self, what: &'static str) -> Result<u32, LocresError> {
+        Ok(u32::from_le_bytes(self.take(4, what)?.try_into().unwrap()))
+    }
+
+    fn fstring(&mut self) -> Result<String, LocresError> {
+        let len = i32::from_le_bytes(self.take(4, "fstring length")?.try_into().unwrap());
+        if len == 0 {
+            return Ok(String::new());
         }
-        let s = String::from_utf8_lossy(&d[*off..*off + n.saturating_sub(1)]).into_owned();
-        *off += n;
-        Ok(s)
-    } else {
-        let n = (-len) as usize;
-        if *off + n * 2 > d.len() {
-            return Err(LocresError::Truncated("fstring utf16 body"));
+        if len > 0 {
+            let n = len as usize;
+            let body = self.take(n, "fstring body")?;
+            return Ok(String::from_utf8_lossy(&body[..n - 1]).into_owned());
         }
-        let pairs: Vec<u16> = d[*off..*off + (n - 1) * 2]
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|c| u16::from_le_bytes(*c))
-            .collect();
-        let s = String::from_utf16_lossy(&pairs);
-        *off += n * 2;
-        Ok(s)
+        // UTF-16: `-len` counts u16 units, two bytes each. Widening first keeps
+        // `i32::MIN` representable; refusing an un-representable byte count
+        // keeps the multiply from wrapping on 32-bit.
+        let units = len.unsigned_abs() as usize;
+        let bytes = units
+            .checked_mul(2)
+            .ok_or(LocresError::Truncated("fstring utf16 body"))?;
+        let body = self.take(bytes, "fstring utf16 body")?;
+        let mut pairs = Vec::with_capacity(units - 1);
+        for c in body[..bytes - 2].as_chunks::<2>().0 {
+            pairs.push(u16::from_le_bytes(*c));
+        }
+        Ok(String::from_utf16_lossy(&pairs))
     }
 }
 
@@ -155,35 +188,37 @@ impl LocresFile {
         }
         let version =
             LocresVersion::from_byte(d[16]).ok_or(LocresError::UnsupportedVersion(d[16]))?;
-        let string_table_offset = i64::from_le_bytes(d[17..25].try_into().unwrap()) as usize;
+        let raw_offset = i64::from_le_bytes(d[17..25].try_into().unwrap());
+        let string_table_offset = usize::try_from(raw_offset).map_err(|_| {
+            LocresError::Structure(format!("negative string table offset {raw_offset}"))
+        })?;
         if string_table_offset >= d.len() {
             return Err(LocresError::Structure(format!(
                 "string table offset {string_table_offset} beyond file"
             )));
         }
 
-        let mut off = 25usize;
-        let entry_count = u32::from_le_bytes(d[off..off + 4].try_into().unwrap()) as usize;
-        let ns_count = u32::from_le_bytes(d[off + 4..off + 8].try_into().unwrap()) as usize;
-        off += 8;
+        let mut r = Reader::new(d, 25);
+        let entry_count = r.u32("entry count")? as usize;
+        let ns_count = r.u32("namespace count")? as usize;
 
-        let mut namespaces = Vec::with_capacity(ns_count);
+        // A forged count must not turn a small file into a huge reservation:
+        // the smallest namespace is 12 bytes (hash, name length, key count).
+        // Without the clamp a 33-byte file claiming u32::MAX namespaces tried
+        // to reserve 240 GB and aborted the process.
+        let mut namespaces = Vec::with_capacity(ns_count.min(r.remaining() / 12));
         let mut key_total = 0usize;
         for _ in 0..ns_count {
-            let hash = u32::from_le_bytes(d[off..off + 4].try_into().unwrap());
-            off += 4;
-            let name = read_fstring(d, &mut off)?;
-            let key_count = u32::from_le_bytes(d[off..off + 4].try_into().unwrap()) as usize;
-            off += 4;
-            let mut keys = Vec::with_capacity(key_count);
+            let hash = r.u32("namespace hash")?;
+            let name = r.fstring()?;
+            let key_count = r.u32("key count")? as usize;
+            // Smallest key: hash, key length, source hash, string index = 16.
+            let mut keys = Vec::with_capacity(key_count.min(r.remaining() / 16));
             for _ in 0..key_count {
-                let key_hash = u32::from_le_bytes(d[off..off + 4].try_into().unwrap());
-                off += 4;
-                let key = read_fstring(d, &mut off)?;
-                let source_hash = u32::from_le_bytes(d[off..off + 4].try_into().unwrap());
-                off += 4;
-                let string_index = u32::from_le_bytes(d[off..off + 4].try_into().unwrap());
-                off += 4;
+                let key_hash = r.u32("key hash")?;
+                let key = r.fstring()?;
+                let source_hash = r.u32("key source hash")?;
+                let string_index = r.u32("key string index")?;
                 keys.push(LocresKey {
                     hash: key_hash,
                     key,
@@ -194,9 +229,10 @@ impl LocresFile {
             key_total += keys.len();
             namespaces.push(LocresNamespace { hash, name, keys });
         }
-        if off != string_table_offset {
+        if r.off != string_table_offset {
             return Err(LocresError::Structure(format!(
-                "key section ends at {off}, string table offset is {string_table_offset}"
+                "key section ends at {}, string table offset is {string_table_offset}",
+                r.off
             )));
         }
         if key_total != entry_count {
@@ -205,25 +241,19 @@ impl LocresFile {
             )));
         }
 
-        let mut soff = string_table_offset;
-        if soff + 4 > d.len() {
-            return Err(LocresError::Truncated("string table count"));
-        }
-        let string_count = u32::from_le_bytes(d[soff..soff + 4].try_into().unwrap()) as usize;
-        soff += 4;
-        let mut strings = Vec::with_capacity(string_count);
-        let mut ref_counts = Vec::with_capacity(string_count);
+        let mut r = Reader::new(d, string_table_offset);
+        let string_count = r.u32("string table count")? as usize;
+        // Smallest entry: string length + refcount = 8 bytes.
+        let mut strings = Vec::with_capacity(string_count.min(r.remaining() / 8));
+        let mut ref_counts = Vec::with_capacity(strings.capacity());
         for _ in 0..string_count {
-            strings.push(read_fstring(d, &mut soff)?);
-            if soff + 4 > d.len() {
-                return Err(LocresError::Truncated("string table refcount"));
-            }
-            ref_counts.push(u32::from_le_bytes(d[soff..soff + 4].try_into().unwrap()));
-            soff += 4;
+            strings.push(r.fstring()?);
+            ref_counts.push(r.u32("string table refcount")?);
         }
-        if soff != d.len() {
+        if r.off != d.len() {
             return Err(LocresError::Structure(format!(
-                "string table ends at {soff}, file is {} bytes",
+                "string table ends at {}, file is {} bytes",
+                r.off,
                 d.len()
             )));
         }
@@ -652,6 +682,80 @@ mod tests {
         assert!(matches!(
             LocresFile::parse(&bytes),
             Err(LocresError::BadMagic)
+        ));
+    }
+
+    /// Header-only scaffold: magic, version 3, string-table offset, zero entry
+    /// count, `ns_count`, then whatever the caller appends.
+    fn malformed(follow: &[u8], ns_count: u32, st_offset: i64) -> Vec<u8> {
+        let mut v = Vec::with_capacity(33 + follow.len());
+        v.extend_from_slice(&LOCRES_MAGIC);
+        v.push(3);
+        v.extend_from_slice(&st_offset.to_le_bytes());
+        v.extend_from_slice(&0u32.to_le_bytes());
+        v.extend_from_slice(&ns_count.to_le_bytes());
+        v.extend_from_slice(follow);
+        v
+    }
+
+    /// `i32::MIN` as an FString length is the shape that used to crash: `-len`
+    /// overflows in a debug build, and in a 32-bit release (wasm) the `len * 2`
+    /// byte count wraps to zero, so the bounds check passes and the slice
+    /// panics. Reproduced on the real wasm module as a bare `unreachable` trap.
+    #[test]
+    fn i32_min_fstring_length_is_an_error() {
+        let mut follow = 0u32.to_le_bytes().to_vec(); // namespace hash
+        follow.extend_from_slice(&i32::MIN.to_le_bytes()); // FString length
+        let bytes = malformed(&follow, 1, 37);
+        assert_eq!(bytes.len(), 41);
+        assert!(matches!(
+            LocresFile::parse(&bytes),
+            Err(LocresError::Truncated(_))
+        ));
+    }
+
+    /// Every read in `parse` is length-checked, so no prefix of a valid file
+    /// may panic (the fixed-width reads used to index unconditionally).
+    #[test]
+    fn every_truncation_is_an_error_not_a_panic() {
+        let bytes = sample().write();
+        for i in 0..bytes.len() {
+            assert!(
+                LocresFile::parse(&bytes[..i]).is_err(),
+                "a {i}-byte prefix must not parse"
+            );
+        }
+    }
+
+    /// A forged count must be refused by the bounds checks, not turned into a
+    /// reservation: `u32::MAX` namespaces on a 33-byte file asked for 240 GB
+    /// and aborted the process before the capacities were clamped.
+    #[test]
+    fn forged_counts_are_refused_without_huge_reservations() {
+        let bytes = malformed(&[], u32::MAX, 24);
+        assert!(matches!(
+            LocresFile::parse(&bytes),
+            Err(LocresError::Truncated(_))
+        ));
+
+        // A namespace claiming u32::MAX keys with no bytes left after it.
+        let mut follow = 0u32.to_le_bytes().to_vec();
+        follow.extend_from_slice(&1i32.to_le_bytes());
+        follow.push(0);
+        follow.extend_from_slice(&u32::MAX.to_le_bytes());
+        let bytes = malformed(&follow, 1, 42);
+        assert!(matches!(
+            LocresFile::parse(&bytes),
+            Err(LocresError::Truncated(_))
+        ));
+
+        // And a forged string-table count on an otherwise valid file.
+        let mut bytes = sample().write();
+        let st = i64::from_le_bytes(bytes[17..25].try_into().unwrap()) as usize;
+        bytes[st..st + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(matches!(
+            LocresFile::parse(&bytes),
+            Err(LocresError::Truncated(_))
         ));
     }
 }
