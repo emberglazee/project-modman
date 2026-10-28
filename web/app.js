@@ -216,6 +216,7 @@ gameFileEl.addEventListener('change', () => {
   gameFile = gameFileEl.files[0] || null;
   gameInfo.textContent = gameFile ? `${gameFile.name} (${fmtBytes(gameFile.size)})` : '';
   refreshUi();
+  scheduleProbe();
 });
 
 // ── The merge flow ────────────────────────────────────────────────────────
@@ -738,6 +739,7 @@ initEngine()
   .then(() => {
     wasmReady = true;
     refreshUi();
+    scheduleProbe(0);
   })
   .catch((e) => {
     setError(`Failed to load the merge engine: ${e}`);
