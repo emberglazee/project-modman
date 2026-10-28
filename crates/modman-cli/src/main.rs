@@ -161,9 +161,6 @@ enum Commands {
         /// PAK version (V3, V8B or V11, default: V11)
         #[arg(long, default_value = "V11")]
         version: String,
-        /// Compression algorithm (zlib, gzip, zstd, lz4)
-        #[arg(long)]
-        compression: Option<String>,
     },
     /// Build a merged mod from Sicario patch files (drop-in replacement for Sicario CLI)
     Build {
@@ -328,7 +325,6 @@ fn main() {
             output,
             mount_point,
             version,
-            compression,
         }) => {
             let output_path = output.unwrap_or_else(|| format!("{}.pak", input));
             let ver = match version.to_uppercase().as_str() {
@@ -343,27 +339,11 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            let comp: Option<modman_pak::Compression> =
-                compression
-                    .as_deref()
-                    .map(|c| match c.to_lowercase().as_str() {
-                        "zlib" => modman_pak::Compression::Zlib,
-                        "gzip" => modman_pak::Compression::Gzip,
-                        "zstd" => modman_pak::Compression::Zstd,
-                        "lz4" => modman_pak::Compression::LZ4,
-                        _ => {
-                            eprintln!(
-                            "Error: unsupported compression '{}'. Use zlib, gzip, zstd, or lz4.",
-                            c
-                        );
-                            std::process::exit(1);
-                        }
-                    });
             println!(
                 "Packing {} to {} (v{}, mount: {}) ...",
                 input, output_path, ver, mount_point
             );
-            match modman_pak::pack(&input, &output_path, ver, mount_point, comp) {
+            match modman_pak::pack(&input, &output_path, ver, mount_point) {
                 Ok(()) => println!("Done!"),
                 Err(e) => {
                     eprintln!("Error: {}", e);
@@ -1221,7 +1201,6 @@ fn main() {
                         &output,
                         modman_pak::Version::V3,
                         "../../../".to_string(),
-                        None,
                     ) {
                         eprintln!("Error packing: {e}");
                         std::process::exit(1);

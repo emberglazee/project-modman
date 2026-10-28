@@ -7,5 +7,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-repak = { git = "https://github.com/trumank/repak", tag = "v0.2.3" }
+# compression is off on purpose. It is the only thing pulling zstd (three
+# RUSTSEC-2026 advisories against 0.13.3, and no fixed 0.13 release exists),
+# flate2 and lz4_flex, and Project Wingman never produces a compressed pak: all
+# 134 paks measured (the 17.5 GB base archive, 133 mod paks from the corpus, the
+# aralanche set and ~mods) report no compression. A compressed entry still fails
+# cleanly with repak's "compression" error, exactly as Oodle already does.
+repak = { git = "https://github.com/trumank/repak", tag = "v0.2.3", default-features = false, features = ["encryption"] }
 thiserror = "2"

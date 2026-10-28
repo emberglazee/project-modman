@@ -2007,7 +2007,6 @@ pub fn run_to_dir(
         &output,
         modman_pak::Version::V3,
         "../../../".to_string(),
-        None,
     )
     .map_err(|e| format!("pack: {e}"))?;
     // The staging copy is scratch; leaving multi-gigabyte duplicates behind is

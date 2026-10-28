@@ -431,8 +431,11 @@ function initEngine() {
     wasm_bindgen.initSync(bytes);
     return Promise.resolve();
   }
-  // Hosted build: fetch the .wasm next to the page.
-  return wasm_bindgen('./pkg/modman_wasm_bg.wasm');
+  // Hosted build: fetch the .wasm next to the page. Carry this script tag's own
+  // cache-busting query, or a new build can pair with a module cached from the
+  // previous one; the version lives in index.html and nowhere else.
+  const bust = (document.currentScript && new URL(document.currentScript.src).search) || '';
+  return wasm_bindgen('./pkg/modman_wasm_bg.wasm' + bust);
 }
 
 initEngine()

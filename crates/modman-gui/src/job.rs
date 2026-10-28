@@ -296,14 +296,8 @@ fn run(job: Job, send: &dyn Fn(Msg)) -> Result<JobOutput, String> {
         }
 
         Job::PakPack { dir, out } => {
-            modman_pak::pack(
-                &dir,
-                &out,
-                modman_pak::Version::V3,
-                "../../../".to_string(),
-                None,
-            )
-            .map_err(|e| e.to_string())?;
+            modman_pak::pack(&dir, &out, modman_pak::Version::V3, "../../../".to_string())
+                .map_err(|e| e.to_string())?;
             Ok(JobOutput::text(format!(
                 "Packed {} into {}",
                 dir.display(),

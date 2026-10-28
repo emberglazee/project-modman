@@ -41,6 +41,28 @@ chose.
   packs on six threads. Peak memory is identical at 250 MB (six paks), 213 MB (a
   20 MB zip) and 280 MB (the 29-pak set), and the merged output is byte-identical.
 
+### Removed
+- `modman pack --compression zlib|gzip|zstd|lz4` is gone, and with it the
+  decompression support it required. Nothing in this game's ecosystem ships a
+  compressed pak: all 134 paks measured (the 17.5 GB base archive, the mod
+  corpus, the 29-addon set and `~mods`) report no compression at all, and
+  Project Wingman is UE 4.27 with Oodle, so the game's own toolchain never
+  produced one either. A compressed entry in some future pak fails with repak's
+  `compression` error, the same way Oodle already did, instead of half-working.
+- Removing it drops `zstd`, `zstd-safe`, `zstd-sys`, `lz4_flex` and
+  `twox-hash` from the dependency tree. Those carried three RUSTSEC-2026
+  advisories against `zstd 0.13.3` (0391, 0398, 0403; no fixed 0.13 release
+  exists, and a `[patch]` cannot bridge a `^0.13` requirement to 0.14) plus five
+  unsound warnings on `zstd-safe`, all of which `cargo audit` reports. They
+  entered the advisory database on 2026-10-26, the same day the crate bumps
+  above were written, which is why that bullet could still say the audit was
+  clean. It is clean again now, apart from the yanked `clipboard-win`.
+- What it was costing: the command line binary goes from 3,278,592 bytes to
+  2,154,520, the wasm module from 669,791 to 373,096, and the offline
+  single-file page from 944,603 to 549,078. The merged output is unchanged: the
+  same four-pak merge hashes `740552fe7dc6ec20…` before and after, and the
+  browser merge of a two-pak set hashes `4075fc25ab5ec47a…` on both builds.
+
 ### Fixed
 - The browser page handed a finished merge's memory to the JavaScript garbage
   collector, which is not obliged to run. Measured against the shipped wasm in
@@ -57,7 +79,9 @@ chose.
   inputs hash identically before and after. Both script tags move to `?v=0.5.2`
   in the same change: this is the first edit to `web/app.js` since 0.5.0, and
   without the bump a returning visitor would run the cached copy and see none of
-  it.
+  it. The page now appends that same query to the `.wasm` it fetches, read from
+  its own script tag, so a new page cannot pair with a module cached from the
+  previous build and the version still lives in one place.
 - Running out of memory while loading a mod pak now reports as running out of
   memory. That failure arrives as `could not load <file> as a pak: unreachable`,
   and the `unreachable` pattern in the error classifier was anchored to the
