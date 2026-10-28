@@ -64,8 +64,8 @@ removed `modman pack --compression` flag.
   bumped crate is GUI-only. The Linux amd64 GUI goes from 10,892,688 bytes to
   11,096,536 (10.89 to 11.10 MB), the cost of the newer extractors; clipboard
   support later costs 1,197,816 bytes (see Fixed), and the order controls and
-  probe thread add 105,336 bytes. The final 0.6.0 Linux amd64 GUI is 11,957,328
-  (11.96 MB) and the CLI is 2,168,560.
+  probe thread add 126,064 bytes. The final 0.6.0 Linux amd64 GUI is 11,978,056
+  (11.98 MB) and the CLI is 2,168,560.
 - No measurable speed change. Paired, interleaved runs of 0.5.1 against the
   dependency-update build stay inside the run-to-run spread of a six-thread
   packer (load ~9): CPU moved by -1.4% on six paks, +9.7% on a 20 MB zip and

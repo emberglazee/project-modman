@@ -136,7 +136,7 @@ impl MergeTab {
         }
     }
 
-    fn maybe_start_probe(&mut self, base_pak: &std::path::Path) {
+    fn maybe_start_probe(&mut self, base_pak: &std::path::Path, ctx: egui::Context) {
         if self.probe.inflight.is_some() || self.inputs.is_empty() {
             return;
         }
@@ -164,6 +164,9 @@ impl MergeTab {
                 modman_core::combine::probe(&base, &paks, &CombineOptions::default())
             })();
             let _ = sender.send((generation, result));
+            // The UI polls the receiver in `ui`; without a repaint the result
+            // would sit unread until the next input event.
+            ctx.request_repaint();
         });
     }
 
@@ -305,7 +308,8 @@ impl MergeTab {
                                 ui.scope_id().with(("modman-merge-drag", i)),
                                 i,
                                 |ui| {
-                                    ui.label(egui::RichText::new("⠿").weak());
+                                    ui.label(egui::RichText::new("::").monospace())
+                                        .on_hover_text("Drag to reorder");
                                 },
                             );
                             ui.label(format!("{}.", i + 1));
@@ -319,16 +323,21 @@ impl MergeTab {
                                         .color(egui::Color32::from_rgb(120, 200, 120)),
                                 );
                             }
-                            if ui.add_enabled(i > 0, egui::Button::new("↑")).clicked() {
+                            if ui
+                                .add_enabled(i > 0, egui::Button::new("Up"))
+                                .on_hover_text("Move up")
+                                .clicked()
+                            {
                                 action = Some(RowAction::Up(i));
                             }
                             if ui
-                                .add_enabled(i + 1 < len, egui::Button::new("↓"))
+                                .add_enabled(i + 1 < len, egui::Button::new("Down"))
+                                .on_hover_text("Move down")
                                 .clicked()
                             {
                                 action = Some(RowAction::Down(i));
                             }
-                            if ui.button("✕").clicked() {
+                            if ui.button("x").on_hover_text("Remove").clicked() {
                                 action = Some(RowAction::Remove(i));
                             }
                         });
@@ -396,7 +405,16 @@ impl MergeTab {
             }
         }
         if let Some(base) = &base_pak {
-            self.maybe_start_probe(base);
+            self.maybe_start_probe(base, ui.ctx().clone());
+        }
+        // egui sleeps between input events. Wake it for the debounce deadline
+        // and while a probe is running; the thread wakes it when it finishes.
+        if let Some(due) = self.probe.due {
+            ui.ctx()
+                .request_repaint_after(due.saturating_duration_since(Instant::now()));
+        }
+        if self.probe.inflight.is_some() {
+            ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
         job
     }
