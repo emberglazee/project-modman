@@ -42,21 +42,41 @@ pub fn read_fstring<R: Read>(reader: &mut R) -> Result<Option<String>, Error> {
         return Ok(None);
     }
 
-    let abs_len = length.unsigned_abs() as usize;
+    // Widen before negating: i32::MIN has no positive counterpart. The body is
+    // read through `take`, so a forged length cannot reserve gigabytes before
+    // the stream turns out to be shorter.
+    let units = length.unsigned_abs() as usize;
+    let byte_len = if length > 0 {
+        units
+    } else {
+        units
+            .checked_mul(2)
+            .ok_or_else(|| Error::Parse("FString length overflows".to_string()))?
+    };
+    let mut buf = Vec::new();
+    reader
+        .by_ref()
+        .take(byte_len as u64)
+        .read_to_end(&mut buf)?;
+    if buf.len() != byte_len {
+        return Err(Error::Parse(format!(
+            "truncated FString: expected {byte_len} bytes, got {}",
+            buf.len()
+        )));
+    }
 
     if length > 0 {
         // UTF-8 string
-        let mut buf = vec![0u8; abs_len];
-        reader.read_exact(&mut buf)?;
         let s = String::from_utf8(buf[..buf.len().saturating_sub(1)].to_vec())
             .map_err(|e| Error::Parse(format!("Invalid UTF-8: {e}")))?;
         Ok(Some(s))
     } else {
-        // UCS-2 string (negative length = 2 bytes per char)
-        let mut buf = vec![0u8; abs_len];
-        reader.read_exact(&mut buf)?;
-        let (chunks, _) = buf[..buf.len().saturating_sub(2)].as_chunks::<2>();
-        let u16_data: Vec<u16> = chunks.iter().map(|c| u16::from_le_bytes(*c)).collect();
+        // UCS-2 string: |length| counts u16 units, two bytes each.
+        let (chunks, _) = buf.as_chunks::<2>();
+        let mut u16_data: Vec<u16> = chunks.iter().map(|c| u16::from_le_bytes(*c)).collect();
+        if u16_data.last() == Some(&0) {
+            u16_data.pop();
+        }
         let s = String::from_utf16(&u16_data)
             .map_err(|e| Error::Parse(format!("Invalid UCS-2: {e}")))?;
         Ok(Some(s))
@@ -109,9 +129,32 @@ pub fn asset_class(uasset: &[u8]) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn test_version_returns_string() {
         assert!(!version().is_empty());
+    }
+
+    #[test]
+    fn reads_utf16_fstrings() {
+        let mut bytes = (-3i32).to_le_bytes().to_vec();
+        for u in [b'A' as u16, b'B' as u16, 0u16] {
+            bytes.extend_from_slice(&u.to_le_bytes());
+        }
+        let mut c = Cursor::new(bytes);
+        assert_eq!(read_fstring(&mut c).unwrap().as_deref(), Some("AB"));
+    }
+
+    #[test]
+    fn fstring_i32_min_is_an_error_without_a_huge_reservation() {
+        let mut c = Cursor::new(i32::MIN.to_le_bytes().to_vec());
+        assert!(read_fstring(&mut c).is_err());
+    }
+
+    #[test]
+    fn negative_table_counts_error() {
+        assert!(crate::names::read_name_table(&mut Cursor::new(Vec::<u8>::new()), -1).is_err());
+        assert!(crate::export::read_export_map(&mut Cursor::new(Vec::<u8>::new()), -1).is_err());
     }
 }

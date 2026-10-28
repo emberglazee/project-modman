@@ -28,20 +28,32 @@ use crate::manifest::{FilePatch, FilePatchSet};
 pub enum HexPatchError {
     /// Template string missing entirely (C# would NRE; we fail cleanly).
     MissingTemplate,
+    /// Template decodes to zero bytes. Matching every position would allocate
+    /// one offset per input byte, so this is refused instead.
+    EmptyTemplate,
     /// Invalid hex/int/text encoding in a template or value.
     BadEncoding(String),
     /// A `before`/`valueBefore` write would start before offset 0.
     WriteBeforeStart { offset: usize, len: usize },
+    /// A `before`/`valueBefore` write would end past the current buffer.
+    WritePastEnd { offset: usize, len: usize },
 }
 
 impl std::fmt::Display for HexPatchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HexPatchError::MissingTemplate => write!(f, "hex patch has no template"),
+            HexPatchError::EmptyTemplate => {
+                write!(f, "hex patch template decodes to no bytes")
+            }
             HexPatchError::BadEncoding(s) => write!(f, "invalid hex patch encoding: {s}"),
             HexPatchError::WriteBeforeStart { offset, len } => write!(
                 f,
                 "hex patch write of {len} bytes before offset {offset} would underflow"
+            ),
+            HexPatchError::WritePastEnd { offset, len } => write!(
+                f,
+                "hex patch write of {len} bytes at offset {offset} would run past the buffer"
             ),
         }
     }
@@ -65,16 +77,25 @@ pub fn to_byte_array(s: &str) -> Result<Vec<u8>, HexPatchError> {
     if let Some(rest) = s.strip_prefix("text:") {
         return Ok(rest.as_bytes().to_vec());
     }
-    let cleaned: String = s
-        .chars()
-        .filter(|c| !c.is_whitespace() && *c != '-')
+    let cleaned: Vec<u8> = s
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace() && *b != b'-')
         .collect();
     let n = cleaned.len() / 2; // C# `template.Length / 2` truncates odd lengths.
+    let nibble = |b: u8| -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    };
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
-        let byte = u8::from_str_radix(&cleaned[i * 2..i * 2 + 2], 16)
-            .map_err(|_| HexPatchError::BadEncoding(s.to_string()))?;
-        out.push(byte);
+        let hi = nibble(cleaned[i * 2]).ok_or_else(|| HexPatchError::BadEncoding(s.to_string()))?;
+        let lo =
+            nibble(cleaned[i * 2 + 1]).ok_or_else(|| HexPatchError::BadEncoding(s.to_string()))?;
+        out.push((hi << 4) | lo);
     }
     Ok(out)
 }
@@ -106,6 +127,9 @@ pub fn pattern_at(src: &[u8], patch: &FilePatch) -> Result<Vec<usize>, HexPatchE
         .as_deref()
         .ok_or(HexPatchError::MissingTemplate)?;
     let tmpl = to_byte_array(template)?;
+    if tmpl.is_empty() {
+        return Err(HexPatchError::EmptyTemplate);
+    }
 
     let window = patch.window.as_ref();
     let after = window
@@ -258,6 +282,14 @@ fn apply_before(
         }
         if r.offset < r.value.len() {
             return Err(HexPatchError::WriteBeforeStart {
+                offset: r.offset,
+                len: r.value.len(),
+            });
+        }
+        // Offsets are computed against the set-start buffer; an earlier
+        // `inPlace` step may have shrunk the buffer since.
+        if r.offset > src.len() {
+            return Err(HexPatchError::WritePastEnd {
                 offset: r.offset,
                 len: r.value.len(),
             });
@@ -554,5 +586,42 @@ mod tests {
         uasset[4..8].copy_from_slice(&old.to_le_bytes());
         let out = apply_length_fixup(&uasset, 99_326, 99_327).unwrap();
         assert_eq!(&out[4..8], &new.to_le_bytes());
+    }
+
+    #[test]
+    fn non_ascii_templates_are_errors_not_panics() {
+        assert!(matches!(
+            to_byte_array("€"),
+            Err(HexPatchError::BadEncoding(_))
+        ));
+        assert!(matches!(
+            to_byte_array("Сбить"),
+            Err(HexPatchError::BadEncoding(_))
+        ));
+    }
+
+    #[test]
+    fn empty_templates_are_refused() {
+        let patch = fp("", "00", "inPlace");
+        assert_eq!(
+            pattern_at(b"AAAA", &patch).unwrap_err(),
+            HexPatchError::EmptyTemplate
+        );
+    }
+
+    #[test]
+    fn write_after_shrink_is_an_error_not_a_panic() {
+        let mut src = Vec::new();
+        src.extend_from_slice(b"AAAAAAAAAA");
+        src.extend_from_slice(&[b'B'; 20]);
+        let err = run_file_patches(
+            &src,
+            &[set(vec![
+                fp("text:AAAAAAAAAA", "text:", "inPlace"),
+                fp("text:BBBBBBBBB", "text:XYZ", "valueBefore"),
+            ])],
+        )
+        .unwrap_err();
+        assert!(matches!(err, HexPatchError::WritePastEnd { .. }));
     }
 }

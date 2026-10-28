@@ -56,7 +56,12 @@ impl FName {
 
 /// Read the name table from a stream
 pub fn read_name_table<R: Read>(reader: &mut R, count: i32) -> Result<Vec<String>, Error> {
-    let mut names = Vec::with_capacity(count as usize);
+    if count < 0 {
+        return Err(Error::Parse(format!("negative name-table count {count}")));
+    }
+    // A forged count must not become a reservation; the loop still reads and
+    // fails cleanly on a short stream.
+    let mut names = Vec::with_capacity((count as usize).min(1_000_000));
     for _ in 0..count {
         let name = crate::read_fstring(reader)?.unwrap_or_default();
         let mut buf = [0u8; 4];

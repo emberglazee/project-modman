@@ -58,10 +58,25 @@ pub fn merge_datatable_overrides(
     let mut conflicts: Vec<String> = Vec::new();
 
     // The vanilla import (link) table: count @65, entries @69 (28 bytes each).
-    let rd_i32 =
-        |b: &[u8], o: usize| -> i32 { i32::from_le_bytes(b[o..o + 4].try_into().unwrap()) };
-    let vimp = rd_i32(vua, 65).max(0) as usize;
-    let vimp_off = rd_i32(vua, 69).max(0) as usize;
+    let rd_i32 = |b: &[u8], o: usize| -> Option<i32> {
+        b.get(o..o + 4)
+            .and_then(|s| s.try_into().ok())
+            .map(i32::from_le_bytes)
+    };
+    let header_i32 = |b: &[u8], o: usize, what: &str| -> Result<i32, ApplyError> {
+        rd_i32(b, o)
+            .ok_or_else(|| ApplyError::Asset(format!("corrupt datatable header: {what} missing")))
+    };
+    let vimp = header_i32(vua, 65, "import count")?.max(0) as usize;
+    let vimp_off = header_i32(vua, 69, "import offset")?.max(0) as usize;
+    if vimp_off
+        .checked_add(vimp.saturating_mul(28))
+        .is_none_or(|end| end > vua.len())
+    {
+        return Err(ApplyError::Asset(
+            "corrupt datatable import table".to_string(),
+        ));
+    }
 
     // Build the merged extras list + per-mod index maps. Name mapping is
     // STRING-based at every index: mods cooked against a different base
@@ -89,8 +104,16 @@ pub fn merge_datatable_overrides(
         // F59 skins swap a texture import to their own asset), not just
         // append. An entry that byte-matches a vanilla entry keeps that
         // index; anything else is appended to the merged table (first-seen).
-        let mimp = rd_i32(ua, 65).max(0) as usize;
-        let mimp_off = rd_i32(ua, 69).max(0) as usize;
+        let mimp = header_i32(ua, 65, "import count")?.max(0) as usize;
+        let mimp_off = header_i32(ua, 69, "import offset")?.max(0) as usize;
+        if mimp_off
+            .checked_add(mimp.saturating_mul(28))
+            .is_none_or(|end| end > ua.len())
+        {
+            return Err(ApplyError::Asset(
+                "corrupt datatable import table".to_string(),
+            ));
+        }
         let v_entries: Vec<&[u8]> = (0..vimp)
             .map(|k| &vua[vimp_off + k * 28..vimp_off + k * 28 + 28])
             .collect();
@@ -2167,6 +2190,26 @@ mod combine_options_tests {
             "a skipped input contributes no conflicts: {:?} {:?}",
             out.field_conflicts,
             out.pass_through_conflicts
+        );
+    }
+
+    #[test]
+    fn forged_import_count_is_an_error_not_a_panic() {
+        let vua = fixture("DB_Aircraft.uasset");
+        let vue = fixture("DB_Aircraft.uexp");
+        let mut ua = vua.clone();
+        ua[65..69].copy_from_slice(&0x1000_0000i32.to_le_bytes());
+        let err = match merge_datatable_overrides(
+            (&vua, &vue),
+            &[(&ua, &vue)],
+            &["forged".to_string()],
+        ) {
+            Err(e) => e,
+            Ok(_) => panic!("a forged import count must be rejected"),
+        };
+        assert!(
+            err.to_string().contains("import table") || err.to_string().contains("import count"),
+            "unexpected error: {err}"
         );
     }
 }

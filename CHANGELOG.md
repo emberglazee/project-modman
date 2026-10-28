@@ -17,6 +17,14 @@ chose. The minor number is for the removed `modman pack --compression` flag.
   while the window said only "no .pak files inside the archive"; it is now
   refused with nothing written. Zip already used the `zip` crate's path check
   and RAR validated each name, so 7z was the only hole.
+- Pak entry names get the same rule. A crafted pak could name an entry
+  `../../x`, and every write site joined it blindly: `unpack` and `combine`
+  were reproduced writing a payload two directories above the output folder,
+  with exit 0. One helper now refuses absolute paths, drive or stream colons
+  and any `..` component at unpack, combine, build, audio extraction and the
+  GUI pak tab, failing with `unsafe entry path escapes destination: <path>`.
+  All 136 paks on the test machine pass it, and the 29-pak merge still hashes
+  `555dca0d…` at 4,607,949,935 bytes.
 - Otherwise extraction is unchanged: the nine `.7z` archives in the mod corpus
   (18 files) unpack to the same file list and per-file SHA-256 under both
   libraries, and a merged pak built from a 7z mod keeps its hash.
@@ -101,6 +109,20 @@ chose. The minor number is for the removed `modman pack --compression` flag.
   memory. The failure arrives as `could not load <file> as a pak: unreachable`,
   and the `unreachable` pattern was anchored to the start and end of the
   message, so the wrapped form fell through to "The merge stopped".
+- Presets keep their non-ASCII text. `sanitize_json` pushed each byte as a
+  Latin-1 character, so a preset containing "Сбить" parsed as mojibake; it now
+  works on bytes. A trailing comma before a comment is removed instead of
+  failing in serde.
+- The locres writer counts UTF-16 units rather than chars, so an emoji
+  translation no longer emits a short length prefix. `parse` rejects
+  out-of-range string indices and `patch_from_csv` cannot panic on one; emoji
+  strings, keys and names round-trip byte-identically.
+- More malformed-input panics are errors: `i32::MIN` as an FString length in
+  the uasset walker, negative name and export counts, property nesting past 128
+  levels, forged import counts in combine and objectRef, non-ASCII hex
+  templates, empty templates (which matched every byte), and `valueBefore`
+  writes past a shrunken buffer. Each has a regression test; the corpus and
+  oracle gates are unchanged.
 
 ## [v0.5.1] — 2026-10-25
 

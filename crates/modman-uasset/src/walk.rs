@@ -321,6 +321,7 @@ struct Walker<'a> {
     pos: usize,
     counters: HashMap<String, usize>,
     mismatches: Vec<String>,
+    prop_depth: usize,
 }
 
 impl<'a> Walker<'a> {
@@ -331,6 +332,7 @@ impl<'a> Walker<'a> {
             pos: 0,
             counters: HashMap::new(),
             mismatches: Vec::new(),
+            prop_depth: 0,
         }
     }
 
@@ -407,9 +409,15 @@ impl<'a> Walker<'a> {
             return Ok(String::new());
         }
         if n < 0 {
-            let cnt = (-n) as usize;
-            let bytes = self.take(cnt * 2)?;
-            let mut u16s = Vec::with_capacity(cnt);
+            // Widen before negating: i32::MIN has no positive counterpart.
+            // checked_mul keeps the byte count representable on 32-bit, where
+            // the doubled length would otherwise wrap to zero.
+            let cnt = n.unsigned_abs() as usize;
+            let bytes_len = cnt
+                .checked_mul(2)
+                .ok_or_else(|| self.err("fstring utf16 length overflows"))?;
+            let bytes = self.take(bytes_len)?;
+            let mut u16s = Vec::with_capacity(bytes.len() / 2);
             let (chunks, _) = bytes.as_chunks::<2>();
             for c in chunks {
                 u16s.push(u16::from_le_bytes(*c));
@@ -536,6 +544,19 @@ impl<'a> Walker<'a> {
     }
 
     fn prop_list(&mut self, ctx: &str) -> Result<Vec<Prop>, Error> {
+        // A crafted table can nest structs without limit; recursion would
+        // overflow the stack, which a wasm build cannot catch.
+        const MAX_DEPTH: usize = 128;
+        if self.prop_depth >= MAX_DEPTH {
+            return Err(self.err(format!("property nesting deeper than {MAX_DEPTH}")));
+        }
+        self.prop_depth += 1;
+        let out = self.prop_list_inner(ctx);
+        self.prop_depth -= 1;
+        out
+    }
+
+    fn prop_list_inner(&mut self, ctx: &str) -> Result<Vec<Prop>, Error> {
         let mut props = Vec::new();
         loop {
             let start = self.pos;

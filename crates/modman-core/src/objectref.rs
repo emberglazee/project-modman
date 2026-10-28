@@ -24,8 +24,10 @@ pub struct ObjectRefEdits {
     pub uexp: Vec<u8>,
 }
 
-fn rd_i32(b: &[u8], o: usize) -> i32 {
-    i32::from_le_bytes(b[o..o + 4].try_into().unwrap())
+fn rd_i32(b: &[u8], o: usize) -> Option<i32> {
+    b.get(o..o + 4)
+        .and_then(|s| s.try_into().ok())
+        .map(i32::from_le_bytes)
 }
 
 /// Apply the mod's objectRef patches for `target`. Returns `None` when no
@@ -41,18 +43,39 @@ pub fn apply_object_refs(
         return Ok(None);
     };
 
-    // Import (link) table from the uasset header.
-    let import_count = rd_i32(uasset, 65) as usize;
-    let import_off = rd_i32(uasset, 69) as usize;
-    let link_at = |i: usize| -> (u64, u64, i32, i32, i32) {
+    // Import (link) table from the uasset header. A walked table can still
+    // carry a forged count or offset: walk_bytes never reads this section.
+    let import_count = rd_i32(uasset, 65)
+        .ok_or_else(|| ApplyError::Asset("corrupt datatable header: import count".into()))?;
+    let import_off = rd_i32(uasset, 69)
+        .ok_or_else(|| ApplyError::Asset("corrupt datatable header: import offset".into()))?;
+    if import_count < 0 || import_off < 0 {
+        return Err(ApplyError::Asset(
+            "corrupt datatable import table".to_string(),
+        ));
+    }
+    let import_count = import_count as usize;
+    let import_off = import_off as usize;
+    if import_off
+        .checked_add(import_count.saturating_mul(28))
+        .is_none_or(|end| end > uasset.len())
+    {
+        return Err(ApplyError::Asset(
+            "corrupt datatable import table".to_string(),
+        ));
+    }
+    let link_at = |i: usize| -> Option<(u64, u64, i32, i32, i32)> {
+        if i >= import_count {
+            return None;
+        }
         let o = import_off + i * 28;
-        (
-            u64::from_le_bytes(uasset[o..o + 8].try_into().unwrap()),
-            u64::from_le_bytes(uasset[o + 8..o + 16].try_into().unwrap()),
-            rd_i32(uasset, o + 16),
-            rd_i32(uasset, o + 20),
-            rd_i32(uasset, o + 24),
-        )
+        Some((
+            u64::from_le_bytes(uasset[o..o + 8].try_into().ok()?),
+            u64::from_le_bytes(uasset[o + 8..o + 16].try_into().ok()?),
+            rd_i32(uasset, o + 16)?,
+            rd_i32(uasset, o + 20)?,
+            rd_i32(uasset, o + 24)?,
+        ))
     };
 
     let mut names: Vec<String> = dt.names.clone();
@@ -112,10 +135,26 @@ pub fn apply_object_refs(
                     continue;
                 };
 
-                let ref_pos = (first_link.unsigned_abs() as usize) - 1;
-                let (ref_base, ref_class, ref_linkage, _, _) = link_at(ref_pos);
-                let outer_pos = (ref_linkage.unsigned_abs() as usize) - 1;
-                let (outer_base, outer_class, _, _, _) = link_at(outer_pos);
+                // A null element (index 0) has no link to borrow from, and a
+                // reference link without an outer link cannot seed the path.
+                if *first_link == 0 {
+                    continue;
+                }
+                let Some(ref_pos) = (first_link.unsigned_abs() as usize).checked_sub(1) else {
+                    continue;
+                };
+                let Some((ref_base, ref_class, ref_linkage, _, _)) = link_at(ref_pos) else {
+                    continue;
+                };
+                if ref_linkage == 0 {
+                    continue;
+                }
+                let Some(outer_pos) = (ref_linkage.unsigned_abs() as usize).checked_sub(1) else {
+                    continue;
+                };
+                let Some((outer_base, outer_class, _, _, _)) = link_at(outer_pos) else {
+                    continue;
+                };
 
                 let path_idx = intern(&mut names, &mut name_additions, &object_path);
                 let name_idx = intern(&mut names, &mut name_additions, &object_name);
@@ -169,11 +208,19 @@ pub fn apply_object_refs(
         new_uexp.splice(*off..*off, bytes.iter().copied());
     }
     for off in &count_bumps {
-        let v = rd_i32(&new_uexp, *off) + 1;
+        let Some(v) = rd_i32(&new_uexp, *off).and_then(|v| v.checked_add(1)) else {
+            return Err(ApplyError::Asset(
+                "objectRef count offset out of range".to_string(),
+            ));
+        };
         new_uexp[*off..*off + 4].copy_from_slice(&v.to_le_bytes());
     }
     for off in &size_bumps {
-        let v = rd_i32(&new_uexp, *off) + 4;
+        let Some(v) = rd_i32(&new_uexp, *off).and_then(|v| v.checked_add(4)) else {
+            return Err(ApplyError::Asset(
+                "objectRef size offset out of range".to_string(),
+            ));
+        };
         new_uexp[*off..*off + 4].copy_from_slice(&v.to_le_bytes());
     }
 

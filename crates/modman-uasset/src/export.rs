@@ -105,7 +105,12 @@ impl FPackageIndex {
 
 /// Read the export map from the current stream position
 pub fn read_export_map<R: Read>(reader: &mut R, count: i32) -> Result<Vec<ExportEntry>, Error> {
-    let mut exports = Vec::with_capacity(count as usize);
+    if count < 0 {
+        return Err(Error::Parse(format!("negative export-map count {count}")));
+    }
+    // A forged count must not become a reservation; the loop still reads and
+    // fails cleanly on a short stream.
+    let mut exports = Vec::with_capacity((count as usize).min(1_000_000));
     for _ in 0..count {
         exports.push(ExportEntry::read(reader)?);
     }
