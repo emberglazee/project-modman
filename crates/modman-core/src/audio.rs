@@ -41,14 +41,14 @@ fn clean(path: &str) -> String {
 
 /// The output path for an asset: its record path minus the always-present
 /// `ProjectWingman/Content/` prefix, with the extension swapped to `.ogg`.
-fn output_path(asset: &str) -> PathBuf {
+fn output_path(asset: &str) -> Option<PathBuf> {
     let cleaned = clean(asset);
     let stem = cleaned
         .strip_suffix(".uasset")
         .or_else(|| cleaned.strip_suffix(".uexp"))
         .unwrap_or(&cleaned);
     let trimmed = stem.strip_prefix("ProjectWingman/Content/").unwrap_or(stem);
-    PathBuf::from(format!("{trimmed}.ogg"))
+    modman_pak::safe_rel(&format!("{trimmed}.ogg"))
 }
 
 fn matches_filter(asset: &str, filter: Option<&str>) -> bool {
@@ -179,7 +179,12 @@ pub fn extract(
             report.warnings.push(format!("{asset}: {w}"));
         }
 
-        let rel = output_path(&asset);
+        let Some(rel) = output_path(&asset) else {
+            report
+                .failed
+                .push((asset, "unsafe output path".to_string()));
+            continue;
+        };
         let full = out_dir.join(&rel);
         if let Some(parent) = full.parent() {
             std::fs::create_dir_all(parent)
@@ -237,14 +242,17 @@ mod tests {
     fn output_path_strips_the_content_prefix_and_swaps_the_extension() {
         assert_eq!(
             output_path("../../../ProjectWingman/Content/Assets/Audio/Dialog/C_M6/x.uasset")
+                .unwrap()
                 .to_string_lossy(),
             "Assets/Audio/Dialog/C_M6/x.ogg"
         );
         assert_eq!(
             output_path("ProjectWingman/Content/Assets/Audio/Music/08_-_Conquest.uasset")
+                .unwrap()
                 .to_string_lossy(),
             "Assets/Audio/Music/08_-_Conquest.ogg"
         );
+        assert!(output_path("ProjectWingman/Content/../../../../evil.uasset").is_none());
     }
 
     #[test]

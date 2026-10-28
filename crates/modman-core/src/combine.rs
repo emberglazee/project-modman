@@ -1980,7 +1980,10 @@ pub fn run_to_dir(
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| format!("{}: {e}", staging.display()))?;
     for (key, bytes) in &outcome.files {
-        let path = staging.join(key);
+        let Some(rel) = modman_pak::safe_rel(key) else {
+            return Err(format!("unsafe entry path escapes destination: {key}"));
+        };
+        let path = staging.join(rel);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
         }
@@ -1991,7 +1994,10 @@ pub fn run_to_dir(
     // one file at a time. This is what keeps a 4.4 GB set from needing GBs of
     // RAM — the bytes are never held whole.
     for (path, source, entry) in &outcome.pass_through {
-        let out_path = staging.join(path);
+        let Some(rel) = modman_pak::safe_rel(path) else {
+            return Err(format!("unsafe entry path escapes destination: {path}"));
+        };
+        let out_path = staging.join(rel);
         if let Some(parent) = out_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
         }

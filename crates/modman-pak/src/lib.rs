@@ -14,6 +14,36 @@ pub enum Error {
     Repak(#[from] repak::Error),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("unsafe entry path escapes destination: {0}")]
+    UnsafePath(String),
+}
+
+/// Normalize a pak or archive entry name to a relative path, or `None` when it
+/// would escape the destination.
+///
+/// Both separators are treated as separators because Windows-style entry names
+/// appear in archives on every platform. Absolute paths, drive letters (and
+/// NTFS alternate streams), and `..` components are refused. The returned path
+/// has no empty or `.` components, so `dest.join(..)` cannot climb out.
+pub fn safe_rel(name: &str) -> Option<std::path::PathBuf> {
+    let name = name.replace('\\', "/");
+    if name.starts_with('/') || name.contains(':') {
+        return None;
+    }
+    let mut out = std::path::PathBuf::new();
+    for part in name.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => return None,
+            p => out.push(p),
+        }
+    }
+    (!out.as_os_str().is_empty()).then_some(out)
+}
+
+/// Join `name` onto `dest`, refusing anything `safe_rel` rejects.
+pub fn safe_join(dest: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    safe_rel(name).map(|rel| dest.join(rel))
 }
 
 /// An opened PAK archive for reading
@@ -104,7 +134,9 @@ impl PakArchive {
             } else {
                 full_path.strip_prefix(prefix).unwrap_or(&full_path)
             };
-            let out_path = output_dir.join(relative);
+            let Some(out_path) = safe_join(output_dir, &relative.to_string_lossy()) else {
+                return Err(Error::UnsafePath(entry_path.clone()));
+            };
 
             if let Some(parent) = out_path.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -192,8 +224,60 @@ fn collect_files(paths: &mut Vec<std::path::PathBuf>, dir: &Path) -> std::io::Re
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn test_version_returns_string() {
         assert!(!env!("CARGO_PKG_VERSION").is_empty());
+    }
+
+    #[test]
+    fn safe_rel_refuses_escapes() {
+        for bad in [
+            "../x",
+            "a/../../x",
+            "/etc/passwd",
+            "C:/x",
+            "C:\\x",
+            "\\\\server\\share\\x",
+            "a\\..\\..\\x",
+            "",
+            ".",
+        ] {
+            assert!(safe_rel(bad).is_none(), "{bad:?} must be refused");
+        }
+        assert_eq!(
+            safe_rel("ProjectWingman/Content/x.txt").unwrap(),
+            std::path::Path::new("ProjectWingman/Content/x.txt")
+        );
+        assert_eq!(
+            safe_rel("a\\b\\c.txt").unwrap(),
+            std::path::Path::new("a/b/c.txt")
+        );
+    }
+
+    #[test]
+    fn unpack_refuses_an_escaping_entry() {
+        let root = std::env::temp_dir().join(format!("modman-pak-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let pak_path = root.join("hostile.pak");
+        {
+            let mut pak = repak::PakBuilder::new().writer(
+                std::io::BufWriter::new(std::fs::File::create(&pak_path).unwrap()),
+                repak::Version::V3,
+                "../../../".to_string(),
+                None,
+            );
+            pak.write_file("../../evil.txt", false, b"payload").unwrap();
+            pak.write_index().unwrap();
+        }
+        let archive = PakArchive::open(&pak_path).unwrap();
+        let out = root.join("a/b/out");
+        std::fs::create_dir_all(&out).unwrap();
+        let err = archive.unpack(&out, "", false).unwrap_err();
+        assert!(matches!(err, Error::UnsafePath(_)));
+        assert!(!root.join("a/evil.txt").exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

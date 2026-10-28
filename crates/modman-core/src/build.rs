@@ -375,7 +375,13 @@ pub fn build_pak(
 
     on_stage(BuildStage::Writing { files: files.len() });
     for (key, bytes) in &files {
-        let out_path = staging.join(key);
+        let Some(rel) = modman_pak::safe_rel(key) else {
+            return Err(BuildError::new(
+                1,
+                format!("unsafe entry path escapes destination: {key}"),
+            ));
+        };
+        let out_path = staging.join(rel);
         if let Some(parent) = out_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -386,7 +392,19 @@ pub fn build_pak(
     }
 
     on_stage(BuildStage::Packing);
-    let pak_out = out_dir.join(pak_name);
+    let Some(pak_rel) = modman_pak::safe_rel(pak_name) else {
+        return Err(BuildError::new(
+            1,
+            format!("unsafe output pak name: {pak_name}"),
+        ));
+    };
+    if pak_rel.components().count() != 1 {
+        return Err(BuildError::new(
+            1,
+            format!("output pak name must be a file name, not a path: {pak_name}"),
+        ));
+    }
+    let pak_out = out_dir.join(pak_rel);
     modman_pak::pack(
         &staging,
         &pak_out,

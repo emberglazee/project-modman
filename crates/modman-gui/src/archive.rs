@@ -4,21 +4,9 @@
 use std::path::{Path, PathBuf};
 
 /// Reject absolute paths and `..` so a hostile archive cannot write outside the
-/// extraction directory.
+/// extraction directory. One implementation, shared with pak entries.
 pub fn safe_join(dest: &Path, name: &[u8]) -> Option<PathBuf> {
-    let name = String::from_utf8_lossy(name).replace('\\', "/");
-    if name.starts_with('/') || name.contains(':') {
-        return None;
-    }
-    let mut out = dest.to_path_buf();
-    for part in name.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => return None,
-            p => out.push(p),
-        }
-    }
-    Some(out)
+    modman_pak::safe_rel(&String::from_utf8_lossy(name)).map(|rel| dest.join(rel))
 }
 
 /// Extract one archive into `dest`, returning how many files landed.

@@ -280,7 +280,9 @@ fn run(job: Job, send: &dyn Fn(Msg)) -> Result<JobOutput, String> {
             let mut n = 0usize;
             for entry in archive.files() {
                 send(Msg::Stage(format!("Extracting {entry}…")));
-                let path = out_dir.join(entry.replace('\\', "/"));
+                let Some(path) = modman_pak::safe_join(&out_dir, &entry) else {
+                    return Err(format!("unsafe entry path escapes destination: {entry}"));
+                };
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                 }
