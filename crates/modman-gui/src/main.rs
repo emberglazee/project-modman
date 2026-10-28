@@ -19,7 +19,9 @@ use tabs::Tab;
 struct Args {
     paths: Vec<PathBuf>,
     merge_now: bool,
+    probe_now: bool,
     build_now: bool,
+    first_wins: bool,
     exit_when_done: bool,
     version: bool,
     out: Option<PathBuf>,
@@ -29,7 +31,9 @@ fn parse_args() -> Args {
     let mut args = Args {
         paths: Vec::new(),
         merge_now: false,
+        probe_now: false,
         build_now: false,
+        first_wins: false,
         exit_when_done: false,
         version: false,
         out: None,
@@ -38,7 +42,9 @@ fn parse_args() -> Args {
     while let Some(a) = it.next() {
         match a.as_str() {
             "--merge-now" => args.merge_now = true,
+            "--probe-now" => args.probe_now = true,
             "--build-now" => args.build_now = true,
+            "--first-wins" => args.first_wins = true,
             "--exit-when-done" => args.exit_when_done = true,
             "--version" | "-V" => args.version = true,
             "--out" => args.out = it.next().map(PathBuf::from),
@@ -49,12 +55,62 @@ fn parse_args() -> Args {
     args
 }
 
+/// Headless conflict probe for CI. Prints one line and exits 0 on a report,
+/// 1 on any error, without creating a window.
+fn run_probe(args: &Args) -> i32 {
+    if args.paths.is_empty() {
+        eprintln!("no mod paks given");
+        return 1;
+    }
+    let Some(game) = modman_core::game::detect_game() else {
+        eprintln!("No game pak found");
+        return 1;
+    };
+    let Some(base_pak) = modman_core::game::find_base_pak(&game.paks_path) else {
+        eprintln!("No game pak found in {}", game.paks_path.display());
+        return 1;
+    };
+    let mut inputs = args.paths.clone();
+    if args.first_wins {
+        inputs.reverse();
+    }
+    let (paks, _temps) = match job::prepare_inputs(&inputs, |_| {}) {
+        Ok(found) => found,
+        Err(error) => {
+            eprintln!("{error}");
+            return 1;
+        }
+    };
+    match modman_core::combine::probe(&base_pak, &paks, &Default::default()) {
+        Ok(report) => {
+            println!(
+                "PROBE OK merged={} files={} order={} conflicts={} passThrough={} warnings={} skipped={}",
+                report.merged,
+                report.files,
+                report.order.join(","),
+                report.field_conflicts.len(),
+                report.pass_through_conflicts.len(),
+                report.warnings.len(),
+                report.skipped.len()
+            );
+            0
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
+}
+
 fn main() -> eframe::Result<()> {
     let args = parse_args();
     // Answers the packaging smoke test without needing a display.
     if args.version {
         println!("modman-gui {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
+    }
+    if args.probe_now {
+        std::process::exit(run_probe(&args));
     }
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -106,6 +162,9 @@ impl App {
         let out_for_build = out_dir.clone();
         let mut merge = tabs::merge::MergeTab::new(out_dir);
         merge.add_paths(args.paths.clone());
+        if args.first_wins {
+            merge.direction = tabs::merge::PriorityDirection::EarlierWins;
+        }
 
         App {
             game_root,
@@ -225,7 +284,7 @@ impl eframe::App for App {
                         Some(base_pak) => {
                             let job = Job::Merge {
                                 base_pak,
-                                inputs: self.merge.inputs.clone(),
+                                inputs: self.merge.application_inputs(),
                                 out_dir: self.merge.out_dir.clone(),
                             };
                             self.start(job, true);
