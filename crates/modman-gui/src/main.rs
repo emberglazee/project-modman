@@ -25,6 +25,7 @@ struct Args {
     exit_when_done: bool,
     version: bool,
     out: Option<PathBuf>,
+    compression: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -37,6 +38,7 @@ fn parse_args() -> Args {
         exit_when_done: false,
         version: false,
         out: None,
+        compression: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -48,11 +50,27 @@ fn parse_args() -> Args {
             "--exit-when-done" => args.exit_when_done = true,
             "--version" | "-V" => args.version = true,
             "--out" => args.out = it.next().map(PathBuf::from),
+            "--compression" => args.compression = it.next(),
             other if !other.starts_with('-') => args.paths.push(PathBuf::from(other)),
             _ => {}
         }
     }
     args
+}
+
+/// The merged pak is V3, so only zlib and gzip are valid here.
+fn parse_gui_compression(value: Option<&str>) -> Option<modman_pak::Compression> {
+    value.map(|c| match c.to_lowercase().as_str() {
+        "zlib" => modman_pak::Compression::Zlib,
+        "gzip" => modman_pak::Compression::Gzip,
+        _ => {
+            eprintln!(
+                "Error: unsupported merge compression '{}'. Use zlib or gzip (V3 output).",
+                c
+            );
+            std::process::exit(1);
+        }
+    })
 }
 
 /// Headless conflict probe for CI. Prints one line and exits 0 on a report,
@@ -165,6 +183,7 @@ impl App {
         if args.first_wins {
             merge.direction = tabs::merge::PriorityDirection::EarlierWins;
         }
+        merge.compression = parse_gui_compression(args.compression.as_deref());
 
         App {
             game_root,
@@ -286,6 +305,7 @@ impl eframe::App for App {
                                 base_pak,
                                 inputs: self.merge.application_inputs(),
                                 out_dir: self.merge.out_dir.clone(),
+                                compression: self.merge.compression,
                             };
                             self.start(job, true);
                         }

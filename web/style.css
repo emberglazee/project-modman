@@ -193,6 +193,14 @@ footer a:hover { text-decoration: underline; }
 }
 .orderbar label { cursor: pointer; color: var(--dim); }
 .orderbar input { accent-color: var(--accent); }
+.orderbar select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 6px;
+}
 
 .probe {
   margin-top: 12px;

@@ -25,7 +25,8 @@
 
 **v1 (Sicario-merger parity) is essentially complete and byte-verified against the C# merger.** Working today:
 
-- PAK I/O (`info`, `list`, `unpack`, `pack`, `scan`)
+- PAK I/O (`info`, `list`, `unpack`, `pack`, `scan`), including compressed entries
+  (Zlib, Gzip, Zstd, LZ4); `pack --compression` writes them.
 - `.dtm`/`.dtp` patch parsing, Fragment DSL, every Sicario patch type
 - Template rendering (Fluid-compatible: `vars`/`inputs` + the full Sicario filter set)
 - **Verified DataTable engine** (byte-exact walker + same-size splice + length-changing rowops)
@@ -112,7 +113,7 @@ WebAssembly, running entirely in your browser:
 ### Desktop app — no terminal needed
 
 `modman-gui` is the same engine in a native window: egui, no browser engine, one
-binary at about 12.0 MB. Download it from the release page and double-click; it
+binary at about 13.0 MB. Download it from the release page and double-click; it
 finds the game on its own, and asks if it cannot.
 
 - **Merge mods**: drag `.rar`, `.7z`, `.zip` or `.pak` files onto the window.
@@ -152,6 +153,12 @@ available while it runs.
 
 The command line still sorts paks alphabetically by full path, so renaming is
 only needed there.
+
+The **Output** menu next to the Priority switch writes the merged pak
+uncompressed, Zlib, or Gzip. The merged pak is V3, so zstd and LZ4 are not
+offered there; `modman pack --version V11 --compression zstd|lz4` covers those.
+`modman combine --compression zlib|gzip` writes the same compressed output from
+the command line.
 
 ### Downloading & first run
 
@@ -288,6 +295,9 @@ modman preset-pack <preset.dtp...> -n MyPack --install-path <game>
 
 # Merge conflicting override mods — no metadata required
 modman combine <pak-or-dir...> --install-path <game> --output <dir>
+
+# Pack a folder; zstd and lz4 need V8+, zlib and gzip work with V3
+modman pack <dir> -o out.pak --version V11 --compression zstd
 ```
 
 ## Project Structure

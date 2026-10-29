@@ -36,6 +36,8 @@ pub struct MergeTab {
     pub inputs: Vec<PathBuf>,
     pub out_dir: PathBuf,
     pub direction: PriorityDirection,
+    /// V3 output, so only Zlib and Gzip are offered.
+    pub compression: Option<modman_pak::Compression>,
     probe: ProbeState,
 }
 
@@ -45,6 +47,7 @@ impl MergeTab {
             inputs: Vec::new(),
             out_dir,
             direction: PriorityDirection::default(),
+            compression: None,
             probe: ProbeState::default(),
         }
     }
@@ -278,6 +281,26 @@ impl MergeTab {
             .small()
             .weak(),
         );
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("Output:");
+            ui.selectable_value(&mut self.compression, None, "Uncompressed");
+            ui.selectable_value(
+                &mut self.compression,
+                Some(modman_pak::Compression::Zlib),
+                "Zlib",
+            );
+            ui.selectable_value(
+                &mut self.compression,
+                Some(modman_pak::Compression::Gzip),
+                "Gzip",
+            );
+        });
+        ui.label(
+            egui::RichText::new("The merged pak is V3, so zstd and lz4 are not offered.")
+                .small()
+                .weak(),
+        );
 
         enum RowAction {
             Up(usize),
@@ -401,6 +424,7 @@ impl MergeTab {
                     base_pak: base_pak.clone(),
                     inputs: self.application_inputs(),
                     out_dir: self.out_dir.clone(),
+                    compression: self.compression,
                 });
             }
         }

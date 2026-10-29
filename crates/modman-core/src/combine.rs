@@ -1663,6 +1663,9 @@ pub struct CombineOptions {
     /// straight from the source pak while writing, so a 4.4 GB mod set does not
     /// have to sit in RAM. The browser leaves it off: it needs the bytes.
     pub defer_passthrough: bool,
+    /// Compress the output pak. `combine` writes V3, so only Zlib and Gzip are
+    /// valid; the other methods need V8 or newer.
+    pub compression: Option<modman_pak::Compression>,
 }
 
 pub fn combine_sources(
@@ -2032,6 +2035,7 @@ fn open_and_combine(
         let opts = CombineOptions {
             datatables_only: options.datatables_only,
             defer_passthrough: true,
+            compression: options.compression,
         };
         combine_sources_with(&base_src, &src_refs, &labels, &opts).map_err(|e| e.to_string())?
     };
@@ -2050,6 +2054,14 @@ pub fn run_to_dir(
 ) -> Result<CombineRun, String> {
     if mod_paks.is_empty() {
         return Err("no mod paks given".to_string());
+    }
+    if matches!(
+        options.compression,
+        Some(modman_pak::Compression::Zstd) | Some(modman_pak::Compression::LZ4)
+    ) {
+        return Err(
+            "combine writes a V3 pak; zstd and lz4 need V8 or newer. Use zlib or gzip.".to_string(),
+        );
     }
 
     let (outcome, labels, archives) = open_and_combine(base_pak, mod_paks, options, &mut on_stage)?;
@@ -2097,6 +2109,7 @@ pub fn run_to_dir(
         &output,
         modman_pak::Version::V3,
         "../../../".to_string(),
+        options.compression,
     )
     .map_err(|e| format!("pack: {e}"))?;
     // The staging copy is scratch; leaving multi-gigabyte duplicates behind is
@@ -2202,7 +2215,14 @@ mod combine_options_tests {
         std::fs::write(data.join("DB_LevelList.uasset"), ua).unwrap();
         std::fs::write(data.join("DB_LevelList.uexp"), ue).unwrap();
         let pak = root.join(format!("{stem}.pak"));
-        modman_pak::pack(&src, &pak, modman_pak::Version::V3, "../../../".to_string()).unwrap();
+        modman_pak::pack(
+            &src,
+            &pak,
+            modman_pak::Version::V3,
+            "../../../".to_string(),
+            None,
+        )
+        .unwrap();
         pak
     }
 

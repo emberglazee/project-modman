@@ -175,14 +175,15 @@ impl PakArchive {
     }
 }
 
-/// Create a .pak file from a directory. Entries are stored uncompressed: the
-/// pak reader has no decompression support compiled in (see Cargo.toml), and a
-/// compressed entry would export a pak this build cannot read back.
+/// Create a .pak file from a directory. `compression` sets the method for every
+/// entry; `None` writes them uncompressed. The reader supports all four methods
+/// the writer offers.
 pub fn pack(
     input_dir: impl AsRef<Path>,
     output_path: impl AsRef<Path>,
     version: Version,
     mount_point: String,
+    compression: Option<Compression>,
 ) -> Result<(), Error> {
     let input_dir = input_dir.as_ref();
     let output_path = output_path.as_ref();
@@ -191,7 +192,8 @@ pub fn pack(
     collect_files(&mut paths, input_dir)?;
     paths.sort();
 
-    let mut pak = repak::PakBuilder::new().writer(
+    let compress_vec: Vec<Compression> = compression.into_iter().collect();
+    let mut pak = repak::PakBuilder::new().compression(compress_vec).writer(
         std::io::BufWriter::new(std::fs::File::create(output_path)?),
         version,
         mount_point,
@@ -202,7 +204,7 @@ pub fn pack(
         let relative = path.strip_prefix(input_dir).expect("path under input dir");
         let data = std::fs::read(path)?;
         let path_str = relative.to_string_lossy().replace('\\', "/");
-        pak.write_file(&path_str, false, data)?;
+        pak.write_file(&path_str, compression.is_some(), data)?;
     }
 
     pak.write_index()?;
@@ -229,6 +231,40 @@ mod tests {
     #[test]
     fn test_version_returns_string() {
         assert!(!env!("CARGO_PKG_VERSION").is_empty());
+    }
+
+    #[test]
+    fn pack_round_trips_every_compression() {
+        let root = std::env::temp_dir().join(format!("modman-pak-compress-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("a.txt"), b"payload").unwrap();
+
+        for (compression, version) in [
+            (Compression::Zlib, Version::V3),
+            (Compression::Gzip, Version::V3),
+            (Compression::Zstd, Version::V11),
+            (Compression::LZ4, Version::V11),
+        ] {
+            let pak = root.join(format!("{compression:?}.pak"));
+            pack(
+                &src,
+                &pak,
+                version,
+                "../../../".to_string(),
+                Some(compression),
+            )
+            .unwrap();
+            let archive = PakArchive::open(&pak).unwrap();
+            assert_eq!(archive.read_entry("a.txt").unwrap(), b"payload");
+            assert!(
+                archive.info().compression.contains(&compression),
+                "{compression:?} not reported in {}",
+                pak.display()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

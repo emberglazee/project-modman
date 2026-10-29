@@ -161,6 +161,9 @@ enum Commands {
         /// PAK version (V3, V8B or V11, default: V11)
         #[arg(long, default_value = "V11")]
         version: String,
+        /// Compression algorithm (zlib, gzip, zstd, lz4)
+        #[arg(long)]
+        compression: Option<String>,
     },
     /// Build a merged mod from Sicario patch files (drop-in replacement for Sicario CLI)
     Build {
@@ -220,6 +223,9 @@ enum Commands {
         /// Output directory for the combined pak (default: current directory)
         #[arg(long)]
         output: Option<String>,
+        /// Compress the output pak (zlib or gzip; combine writes a V3 pak)
+        #[arg(long)]
+        compression: Option<String>,
     },
     /// Inspect a Sicario patch file (.dtm, .dtp, or embedded _meta build request)
     Patch {
@@ -325,6 +331,7 @@ fn main() {
             output,
             mount_point,
             version,
+            compression,
         }) => {
             let output_path = output.unwrap_or_else(|| format!("{}.pak", input));
             let ver = match version.to_uppercase().as_str() {
@@ -343,7 +350,8 @@ fn main() {
                 "Packing {} to {} (v{}, mount: {}) ...",
                 input, output_path, ver, mount_point
             );
-            match modman_pak::pack(&input, &output_path, ver, mount_point) {
+            let comp = parse_compression(compression.as_deref());
+            match modman_pak::pack(&input, &output_path, ver, mount_point, comp) {
                 Ok(()) => println!("Done!"),
                 Err(e) => {
                     eprintln!("Error: {}", e);
@@ -834,6 +842,7 @@ fn main() {
             datatables_only,
             install_path,
             output,
+            compression,
         }) => {
             let install_path = install_path.as_deref().map(unquote).map(str::to_string);
             let output = output.as_deref().map(unquote).map(str::to_string);
@@ -861,7 +870,13 @@ fn main() {
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
             println!("Game: {path}");
-            if let Err(e) = cmd_combine(&game_paks, &paks, &out_dir, datatables_only) {
+            if let Err(e) = cmd_combine(
+                &game_paks,
+                &paks,
+                &out_dir,
+                datatables_only,
+                parse_combine_compression(compression.as_deref()),
+            ) {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
@@ -1201,6 +1216,7 @@ fn main() {
                         &output,
                         modman_pak::Version::V3,
                         "../../../".to_string(),
+                        None,
                     ) {
                         eprintln!("Error packing: {e}");
                         std::process::exit(1);
@@ -1523,6 +1539,38 @@ fn resolve_paks_dir(path: &str) -> std::path::PathBuf {
     }
 }
 
+/// Parse a compression name for `pack`, where zstd and lz4 are valid with V8+.
+fn parse_compression(value: Option<&str>) -> Option<modman_pak::Compression> {
+    value.map(|c| match c.to_lowercase().as_str() {
+        "zlib" => modman_pak::Compression::Zlib,
+        "gzip" => modman_pak::Compression::Gzip,
+        "zstd" => modman_pak::Compression::Zstd,
+        "lz4" => modman_pak::Compression::LZ4,
+        _ => {
+            eprintln!(
+                "Error: unsupported compression '{}'. Use zlib, gzip, zstd, or lz4.",
+                c
+            );
+            std::process::exit(1);
+        }
+    })
+}
+
+/// `combine` writes a V3 pak, where only zlib and gzip are defined.
+fn parse_combine_compression(value: Option<&str>) -> Option<modman_pak::Compression> {
+    let compression = parse_compression(value);
+    if matches!(
+        compression,
+        Some(modman_pak::Compression::Zstd) | Some(modman_pak::Compression::LZ4)
+    ) {
+        eprintln!(
+            "Error: combine writes a V3 pak; zstd and lz4 need V8 or newer. Use zlib or gzip."
+        );
+        std::process::exit(1);
+    }
+    compression
+}
+
 /// Combine conflicting override mods: three-way datatable merges (vanilla +
 /// each mod's delta, later mods win), single-winner pass-through for
 /// non-datatable files, warnings on irreconcilable conflicts.
@@ -1531,6 +1579,7 @@ fn cmd_combine(
     pak_args: &[String],
     out_dir: &std::path::Path,
     datatables_only: bool,
+    compression: Option<modman_pak::Compression>,
 ) -> Result<(), String> {
     // Expand args (files or directories, recursive).
     fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
@@ -1574,6 +1623,7 @@ fn cmd_combine(
         out_dir,
         &modman_core::combine::CombineOptions {
             datatables_only,
+            compression,
             ..Default::default()
         },
         |stage| {

@@ -106,9 +106,15 @@ network at all.
 No. The page is the no-metadata `combine` path; for original Sicario mods use
 the desktop **Build presets** tab or `modman build` / `preset-pack`.
 
+**Can it read compressed mod paks?**
+Yes. Zlib, Gzip, Zstd and LZ4 entries are decompressed; Oodle still needs the
+proprietary library and is not supported. The Output menu writes Zlib or Gzip
+into the merged V3 pak.
+
 **Why is it so large for a web page?**
-The merge engine is embedded (~0.57 MB single file). It runs the same code as the
-command-line tool, byte for byte, which the project's test suite checks.
+The merge engine is embedded (~1.5 MB single file). It runs the same code as the
+command-line tool, byte for byte, which the project's test suite checks. The
+compressed-pak reader and writer account for most of the size added in 0.6.1.
 
 ## Credits
 

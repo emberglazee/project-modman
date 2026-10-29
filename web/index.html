@@ -60,6 +60,12 @@
       <span class="hint">Priority:</span>
       <label><input type="radio" name="priority" value="last" checked> Later in the list wins</label>
       <label><input type="radio" name="priority" value="first"> Earlier in the list wins</label>
+      <label class="hint" for="compressionSelect">Output:</label>
+      <select id="compressionSelect">
+        <option value="none" selected>Uncompressed</option>
+        <option value="zlib">Zlib</option>
+        <option value="gzip">Gzip</option>
+      </select>
       <button class="btn secondary" id="checkNowBtn" disabled>Check now</button>
     </div>
     <p class="hint" id="orderHint">Applied top to bottom. Later entries win.</p>
@@ -128,7 +134,7 @@
   </p>
 </footer>
 
-<script src="pkg/modman_wasm.js?v=0.6.0"></script>
-<script src="app.js?v=0.6.0"></script>
+<script src="pkg/modman_wasm.js?v=0.6.1"></script>
+<script src="app.js?v=0.6.1"></script>
 </body>
 </html>

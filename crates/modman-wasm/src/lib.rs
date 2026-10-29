@@ -205,6 +205,7 @@ fn validate_order(len: usize, order: &[u32]) -> Result<Vec<usize>, String> {
 pub struct MergeSession {
     mods: Vec<(String, Rc<Vec<u8>>)>,
     order: Option<Vec<usize>>,
+    compression: Option<repak::Compression>,
     game_size: u64,
     regions: RegionMap,
     missing: MissingSlot,
@@ -217,6 +218,7 @@ impl MergeSession {
         MergeSession {
             mods: Vec::new(),
             order: None,
+            compression: None,
             game_size: 0,
             regions: Rc::new(RefCell::new(Vec::new())),
             missing: Rc::new(RefCell::new(None)),
@@ -236,6 +238,22 @@ impl MergeSession {
     pub fn set_order(&mut self, order: Vec<u32>) -> Result<(), JsValue> {
         let order = validate_order(self.mods.len(), &order).map_err(|e| JsValue::from_str(&e))?;
         self.order = Some(order);
+        Ok(())
+    }
+
+    /// Set the output compression for `step`. The merged pak is V3, so only
+    /// `zlib` and `gzip` are accepted; an empty string or `none` disables it.
+    pub fn set_compression(&mut self, method: String) -> Result<(), JsValue> {
+        self.compression = match method.to_lowercase().as_str() {
+            "" | "none" => None,
+            "zlib" => Some(repak::Compression::Zlib),
+            "gzip" => Some(repak::Compression::Gzip),
+            other => {
+                return Err(JsValue::from_str(&format!(
+                    "unsupported merge compression '{other}'; the V3 output accepts zlib or gzip"
+                )))
+            }
+        };
         Ok(())
     }
 
@@ -359,6 +377,7 @@ impl MergeSession {
         let options = CombineOptions {
             datatables_only: false,
             defer_passthrough: !pack,
+            compression: self.compression,
         };
         let mut outcome = match combine_sources_with(&base, &src_refs, &labels, &options) {
             Ok(o) => o,
@@ -395,7 +414,8 @@ impl MergeSession {
         // a second copy of the output is fatal on the same sets.
         let mut cursor = Cursor::new(Vec::new());
         {
-            let mut writer = repak::PakBuilder::new().writer(
+            let compression = self.compression;
+            let mut writer = repak::PakBuilder::new().compression(compression).writer(
                 &mut cursor,
                 repak::Version::V3,
                 "../../../".to_string(),
@@ -403,7 +423,9 @@ impl MergeSession {
             );
             let files = std::mem::take(&mut outcome.files);
             for (p, data) in files {
-                writer.write_file(&p, false, data).map_err(map_err)?;
+                writer
+                    .write_file(&p, compression.is_some(), data)
+                    .map_err(map_err)?;
             }
             writer.write_index().map_err(map_err)?;
         }
@@ -476,6 +498,23 @@ pub fn locres_diff(a: &[u8], b: &[u8]) -> Result<String, JsValue> {
         diff.added.len(),
         diff.removed.len()
     ))
+}
+
+#[cfg(test)]
+mod compression_tests {
+    use super::MergeSession;
+
+    #[test]
+    fn compression_accepts_the_v3_methods_and_clears() {
+        let mut session = MergeSession::new();
+        assert_eq!(session.compression, None);
+        session.set_compression("zlib".to_string()).unwrap();
+        assert_eq!(session.compression, Some(repak::Compression::Zlib));
+        session.set_compression("gzip".to_string()).unwrap();
+        assert_eq!(session.compression, Some(repak::Compression::Gzip));
+        session.set_compression("none".to_string()).unwrap();
+        assert_eq!(session.compression, None);
+    }
 }
 
 #[cfg(test)]

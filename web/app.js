@@ -27,11 +27,13 @@ const resultCard = $('resultCard');
 const resultSummary = $('resultSummary');
 const reportEl = $('report');
 const downloadBtn = $('downloadBtn');
+const compressionSelect = $('compressionSelect');
 
 let wasmReady = false;
 let modEntries = [];   // { file, id, sessionIndex }
 let nextModId = 1;
 let direction = 'last'; // 'last' = later wins, 'first' = earlier wins
+let compression = 'none'; // 'none', 'zlib' or 'gzip'; the merged pak is V3
 let gameFile = null;    // File
 let resultPak = null;
 let mergeSession = null;
@@ -199,6 +201,10 @@ for (const radio of document.querySelectorAll('input[name="priority"]')) {
 }
 
 checkNowBtn?.addEventListener('click', () => scheduleProbe(0));
+
+compressionSelect?.addEventListener('change', () => {
+  compression = compressionSelect.value;
+});
 
 modFilesEl.addEventListener('change', () => addModFiles(modFilesEl.files));
 
@@ -585,6 +591,7 @@ async function runMerge() {
 
     session = await ensureSession((text) => setStatus(text, 0.02));
     session.set_order(new Uint32Array(applicationIndices()));
+    session.set_compression(compression);
 
     // The pak index + footer live at the end of the file; ensureSession seeded
     // the tail, and the step loop asks for anything else it needs.

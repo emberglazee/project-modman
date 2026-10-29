@@ -1,5 +1,54 @@
 # Changelog
 
+## [v0.6.1] — 2026-10-29
+
+**Compressed paks are readable again, and the merger can write them.** 0.6.0
+removed the compression feature after a 134-pak local scan found no compressed
+entries. A Nexus report proved that sample was incomplete: a mod pak used Zlib,
+and every 0.6.0 content read path returned `repak error: enable the compression
+feature to read compressed paks`. This release restores the reader, restores
+`modman pack --compression`, and adds compression to the merge output.
+
+### Fixed
+- Compressed entries are decoded again. `unpack`, `combine`, `build`, the
+  desktop app and the browser page read Zlib, Gzip, Zstd and LZ4 instead of
+  refusing the pak. On the DB_LevelList fixture set, a Zlib-compressed mod
+  combines to the same `e0c111ea…` 73,086-byte output as the uncompressed pak.
+- `modman-pak` now has a round-trip test for every method
+  (`pack_round_trips_every_compression`): pack Zlib, Gzip, Zstd and LZ4, open
+  the result, read the entry back, and assert the compression is reported.
+- `repak` is pinned to a fork commit (`909e098`, based on upstream `355b5f6`)
+  that moves `zstd` to 0.14.3, `zstd-safe` 8.2.0 and `zstd-sys` 2.1.2. Upstream
+  still pins `zstd 0.13`, which carries RUSTSEC-2026-0391; `zstd-safe` 7.3.0
+  carries 0398 and 0403, and no fixed 0.13 or 7.x exists. The two zstd calls
+  repak makes are unchanged in 0.14. `cargo audit` is clean.
+- Oodle stays out of scope: repak's `oodle` feature needs the proprietary Oodle
+  library, and this build does not enable it. Oodle-compressed entries still
+  fail with repak's Oodle error.
+
+### Added
+- `modman pack --compression` is back (`zlib`, `gzip`, `zstd` or `lz4`). Zstd
+  and LZ4 need `--version V11` (or another V8+ version); Zlib and Gzip work in
+  V3.
+- `modman combine --compression zlib|gzip` compresses the merged
+  `SicarioCombine_P.pak`. The command writes a V3 pak, so Zstd and LZ4 are
+  rejected with a clear message; use `modman pack --version V11` for those.
+- The desktop **Merge mods** tab and the browser page add an **Output** menu
+  with Uncompressed, Zlib and Gzip. The browser sends the choice to
+  `MergeSession::set_compression`; the desktop stores it in `CombineOptions`.
+  On `a-zlib.pak` + `b.pak`, the Zlib output (`06ce6ad1…`, 12,787 bytes) is
+  byte-identical to the CLI's.
+
+### What it costs
+- The CLI grows from 2,168,560 to 3,297,832 bytes, the GUI from 11,978,056 to
+  13,024,464, the wasm module from 376,173 to 1,102,662, and the single-file
+  page from 568,250 to 1,538,532. These are local Linux amd64 release builds
+  (wasm and page from a local `wasm-pack` build); the compressed-pak code is
+  the bulk of the difference.
+- The uncompressed gates are unchanged: the 29-pak aralanche merge still hashes
+  `555dca0d12d2ac24…` at 4,607,949,935 bytes, and the `awfap-preset.dtp` build
+  still hashes `676333ac…` at 167,017 bytes.
+
 ## [v0.6.0] — 2026-10-28
 
 **A mod archive can no longer write outside its extraction folder.** Every

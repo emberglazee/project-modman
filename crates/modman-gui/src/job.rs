@@ -44,6 +44,7 @@ pub enum Job {
         base_pak: PathBuf,
         inputs: Vec<PathBuf>,
         out_dir: PathBuf,
+        compression: Option<modman_pak::Compression>,
     },
     AudioList {
         pak: PathBuf,
@@ -115,7 +116,8 @@ fn run(job: Job, send: &dyn Fn(Msg)) -> Result<JobOutput, String> {
             base_pak,
             inputs,
             out_dir,
-        } => merge(&base_pak, &inputs, &out_dir, send),
+            compression,
+        } => merge(&base_pak, &inputs, &out_dir, compression, send),
 
         Job::AudioList { pak, filter } => {
             let archive = PakArchive::open(&pak).map_err(|e| format!("{}: {e}", pak.display()))?;
@@ -299,8 +301,14 @@ fn run(job: Job, send: &dyn Fn(Msg)) -> Result<JobOutput, String> {
         }
 
         Job::PakPack { dir, out } => {
-            modman_pak::pack(&dir, &out, modman_pak::Version::V3, "../../../".to_string())
-                .map_err(|e| e.to_string())?;
+            modman_pak::pack(
+                &dir,
+                &out,
+                modman_pak::Version::V3,
+                "../../../".to_string(),
+                None,
+            )
+            .map_err(|e| e.to_string())?;
             Ok(JobOutput::text(format!(
                 "Packed {} into {}",
                 dir.display(),
@@ -489,6 +497,7 @@ fn merge(
     base_pak: &std::path::Path,
     inputs: &[PathBuf],
     out_dir: &std::path::Path,
+    compression: Option<modman_pak::Compression>,
     send: &dyn Fn(Msg),
 ) -> Result<JobOutput, String> {
     let (paks, _temps) = prepare_inputs(inputs, |text| send(Msg::Stage(text.to_string())))?;
@@ -500,7 +509,10 @@ fn merge(
         base_pak,
         &paks,
         out_dir,
-        &CombineOptions::default(),
+        &CombineOptions {
+            compression,
+            ..Default::default()
+        },
         |stage| {
             use modman_core::combine::CombineStage::*;
             let text = match stage {

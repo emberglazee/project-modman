@@ -410,6 +410,7 @@ pub fn build_pak(
         &pak_out,
         modman_pak::Version::V3,
         "../../../".to_string(),
+        None,
     )
     .map_err(|e| BuildError::new(1, format!("Pack error: {e}")))?;
     // The staging dir is scratch: the C# transport left none behind, and in the

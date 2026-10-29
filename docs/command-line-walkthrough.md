@@ -141,6 +141,7 @@ to see what a mod set would do.
 | `The system cannot find the path specified` | a path is wrong or a folder name has a typo | copy the path from Explorer's address bar, keep the quotes |
 | `Could not locate Project Wingman` | auto-detection failed | add `--install-path "…\Project Wingman"` |
 | `Invalid pak` or `magic` | the file is not a pak (often a renamed zip) | extract the archive and use the `.pak` inside |
+| `enable the compression feature to read compressed paks` | a 0.6.0 binary met a compressed mod pak | update to 0.6.1 or newer; 0.6.0 removed the reader |
 | It merges but nothing changes in game | the originals are still in `~mods`, or the game was not restarted | move them out, restart |
 | Windows Defender blocks the download | unsigned binary | allow it, or build from source |
 
