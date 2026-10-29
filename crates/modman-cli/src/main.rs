@@ -347,11 +347,17 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+            let comp = match parse_pack_compression(compression.as_deref()) {
+                Ok(compression) => compression,
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            };
             println!(
                 "Packing {} to {} (v{}, mount: {}) ...",
                 input, output_path, ver, mount_point
             );
-            let comp = parse_pack_compression(compression.as_deref());
             match modman_pak::pack(&input, &output_path, ver, mount_point, comp) {
                 Ok(()) => println!("Done!"),
                 Err(e) => {
@@ -1540,51 +1546,46 @@ fn resolve_paks_dir(path: &str) -> std::path::PathBuf {
     }
 }
 
-/// Parse a compression name. The callers decide which methods they expose:
-/// `pack` rejects zstd/lz4 for Project Wingman, and `combine` rejects them
-/// because it writes a V3 pak.
-fn parse_compression(value: Option<&str>) -> Option<modman_pak::Compression> {
-    value.map(|c| match c.to_lowercase().as_str() {
-        "zlib" => modman_pak::Compression::Zlib,
-        "gzip" => modman_pak::Compression::Gzip,
-        "zstd" => modman_pak::Compression::Zstd,
-        "lz4" => modman_pak::Compression::LZ4,
-        _ => {
-            eprintln!("Error: unsupported compression '{}'. Use zlib or gzip.", c);
-            std::process::exit(1);
-        }
-    })
-}
-
 /// Parse a compression name for `pack`, where only the methods Project
 /// Wingman can load are valid. Zstd and LZ4 remain readable but are not
 /// write options for this game.
-fn parse_pack_compression(value: Option<&str>) -> Option<modman_pak::Compression> {
-    let compression = parse_compression(value);
-    if matches!(
-        compression,
-        Some(modman_pak::Compression::Zstd) | Some(modman_pak::Compression::LZ4)
-    ) {
-        eprintln!("Error: Project Wingman cannot load zstd or lz4 paks. Use zlib or gzip.");
-        std::process::exit(1);
+fn parse_pack_compression(value: Option<&str>) -> Result<Option<modman_pak::Compression>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value.to_lowercase().as_str() {
+        "zlib" => Ok(Some(modman_pak::Compression::Zlib)),
+        "gzip" => Ok(Some(modman_pak::Compression::Gzip)),
+        "zstd" | "lz4" => {
+            Err("Project Wingman cannot load zstd or lz4 paks. Use zlib or gzip.".to_string())
+        }
+        _ => Err(format!(
+            "unsupported compression '{value}'. Use zlib or gzip."
+        )),
     }
-    compression
 }
 
 /// Parse a compression name for `combine`, where zstd and lz4 are rejected
 /// because `combine` writes a V3 pak.
 fn parse_combine_compression(value: Option<&str>) -> Option<modman_pak::Compression> {
-    let compression = parse_compression(value);
-    if matches!(
-        compression,
-        Some(modman_pak::Compression::Zstd) | Some(modman_pak::Compression::LZ4)
-    ) {
-        eprintln!(
-            "Error: combine writes a V3 pak; zstd and lz4 need V8 or newer. Use zlib or gzip."
-        );
-        std::process::exit(1);
+    let value = value?;
+    match value.to_lowercase().as_str() {
+        "zlib" => Some(modman_pak::Compression::Zlib),
+        "gzip" => Some(modman_pak::Compression::Gzip),
+        "zstd" | "lz4" => {
+            eprintln!(
+                "Error: combine writes a V3 pak; zstd and lz4 need V8 or newer. Use zlib or gzip."
+            );
+            std::process::exit(1);
+        }
+        _ => {
+            eprintln!(
+                "Error: unsupported compression '{}'. Use zlib or gzip.",
+                value
+            );
+            std::process::exit(1);
+        }
     }
-    compression
 }
 
 /// Combine conflicting override mods: three-way datatable merges (vanilla +
@@ -1892,6 +1893,27 @@ fn write_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pack_compression_only_accepts_game_methods() {
+        assert!(matches!(
+            parse_pack_compression(Some("zlib")),
+            Ok(Some(modman_pak::Compression::Zlib))
+        ));
+        assert!(matches!(
+            parse_pack_compression(Some("GZIP")),
+            Ok(Some(modman_pak::Compression::Gzip))
+        ));
+        assert!(matches!(parse_pack_compression(None), Ok(None)));
+        for rejected in ["zstd", "LZ4"] {
+            let err = parse_pack_compression(Some(rejected)).unwrap_err();
+            assert!(err.contains("cannot load"), "{rejected}: {err}");
+        }
+        for unknown in ["oodle", "brotli", ""] {
+            let err = parse_pack_compression(Some(unknown)).unwrap_err();
+            assert!(err.contains("unsupported compression"), "{unknown}: {err}");
+        }
+    }
 
     #[test]
     fn wildcard_basics() {

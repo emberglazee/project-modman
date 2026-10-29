@@ -17,6 +17,9 @@ feature to read compressed paks`. This release restores the reader, restores
 - `modman-pak` now has a round-trip test for every method
   (`pack_round_trips_every_compression`): pack Zlib, Gzip, Zstd and LZ4, open
   the result, read the entry back, and assert the compression is reported.
+- A CLI test (`pack_compression_only_accepts_game_methods`) asserts that
+  `pack --compression` accepts zlib/gzip and rejects zstd, lz4, Oodle and
+  unknown names.
 - `repak` is pinned to a fork commit (`909e098`, based on upstream `355b5f6`)
   that moves `zstd` to 0.14.3, `zstd-safe` 8.2.0 and `zstd-sys` 2.1.2. Upstream
   still pins `zstd 0.13`, which carries RUSTSEC-2026-0391; `zstd-safe` 7.3.0

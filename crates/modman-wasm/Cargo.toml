@@ -11,8 +11,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 modman-core = { path = "../modman-core" }
-# Workspace repak: same features as the merger (compression off, encryption
-# kept; see the root Cargo.toml).
+# Workspace repak: compression and encryption are enabled; the wasm Output
+# setter exposes only Zlib/Gzip. See the root Cargo.toml.
 repak = { workspace = true }
 wasm-bindgen = "0.2.129"
 js-sys = "0.3.106"

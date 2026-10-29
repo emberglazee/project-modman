@@ -176,8 +176,8 @@ impl PakArchive {
 }
 
 /// Create a .pak file from a directory. `compression` sets the method for every
-/// entry; `None` writes them uncompressed. The reader supports all four methods
-/// the writer offers.
+/// entry; `None` writes them uncompressed. The reader supports all four
+/// methods (Zlib, Gzip, Zstd and LZ4).
 pub fn pack(
     input_dir: impl AsRef<Path>,
     output_path: impl AsRef<Path>,
