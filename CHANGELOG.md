@@ -14,6 +14,10 @@ feature to read compressed paks`. This release restores the reader, restores
   desktop app and the browser page read Zlib, Gzip, Zstd and LZ4 instead of
   refusing the pak. On the DB_LevelList fixture set, a Zlib-compressed mod
   combines to the same `e0c111ea…` 73,086-byte output as the uncompressed pak.
+- A real downloaded Zlib mod (`~FE_15_V3.0_P.pak`, 73 entries, 68,393,429 B)
+  also combines cleanly: 3 datatables merged, a 73-entry Zlib output
+  (74,771,923 B), and the unpacked input and output trees are `diff -r`
+  identical.
 - `modman-pak` now has a round-trip test for every method
   (`pack_round_trips_every_compression`): pack Zlib, Gzip, Zstd and LZ4, open
   the result, read the entry back, and assert the compression is reported.
@@ -44,10 +48,10 @@ feature to read compressed paks`. This release restores the reader, restores
   byte-identical to the CLI's.
 
 ### What it costs
-- The CLI grows from 2,168,560 to 3,306,720 bytes, the GUI from 11,978,056 to
+- The CLI grows from 2,168,560 to 3,308,128 bytes, the GUI from 11,978,056 to
   12,983,392, the wasm module from 376,173 to 1,106,487, and the single-file
   page from 568,250 to 1,543,632. These are the Linux amd64 artifacts from CI
-  run `40799869641` (commit `ab9af43`); the wasm and page are from that run's
+  run `40804283812` (commit `88fda7f`); the wasm and page are from that run's
   Pages artifact. The release bump adds the 0.6.1 version string, so re-measure
   the published assets if the exact bytes matter.
 - The uncompressed gates are unchanged: the 29-pak aralanche merge still hashes
