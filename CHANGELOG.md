@@ -27,12 +27,13 @@ feature to read compressed paks`. This release restores the reader, restores
   fail with repak's Oodle error.
 
 ### Added
-- `modman pack --compression` is back (`zlib`, `gzip`, `zstd` or `lz4`). Zstd
-  and LZ4 need `--version V11` (or another V8+ version); Zlib and Gzip work in
-  V3.
+- `modman pack --compression` is back for Zlib and Gzip, the only methods
+  Project Wingman can load. Zstd and LZ4 remain readable but are not writer
+  options for this game; the shipping executable has no decompressor for them.
 - `modman combine --compression zlib|gzip` compresses the merged
   `SicarioCombine_P.pak`. The command writes a V3 pak, so Zstd and LZ4 are
-  rejected with a clear message; use `modman pack --version V11` for those.
+  rejected with a clear message; those methods are not writer options for this
+  game.
 - The desktop **Merge mods** tab and the browser page add an **Output** menu
   with Uncompressed, Zlib and Gzip. The browser sends the choice to
   `MergeSession::set_compression`; the desktop stores it in `CombineOptions`.

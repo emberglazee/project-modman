@@ -26,7 +26,8 @@
 **v1 (Sicario-merger parity) is essentially complete and byte-verified against the C# merger.** Working today:
 
 - PAK I/O (`info`, `list`, `unpack`, `pack`, `scan`), including compressed entries
-  (Zlib, Gzip, Zstd, LZ4); `pack --compression` writes them.
+  (Zlib, Gzip, Zstd, LZ4); `pack --compression` writes Zlib or Gzip, the methods
+  Project Wingman can load.
 - `.dtm`/`.dtp` patch parsing, Fragment DSL, every Sicario patch type
 - Template rendering (Fluid-compatible: `vars`/`inputs` + the full Sicario filter set)
 - **Verified DataTable engine** (byte-exact walker + same-size splice + length-changing rowops)
@@ -155,8 +156,8 @@ The command line still sorts paks alphabetically by full path, so renaming is
 only needed there.
 
 The **Output** menu next to the Priority switch writes the merged pak
-uncompressed, Zlib, or Gzip. The merged pak is V3, so zstd and LZ4 are not
-offered there; `modman pack --version V11 --compression zstd|lz4` covers those.
+uncompressed, Zlib, or Gzip. The merged pak is V3, and Project Wingman has no
+zstd or LZ4 decompressor, so those methods are read-only.
 `modman combine --compression zlib|gzip` writes the same compressed output from
 the command line.
 
@@ -296,8 +297,8 @@ modman preset-pack <preset.dtp...> -n MyPack --install-path <game>
 # Merge conflicting override mods — no metadata required
 modman combine <pak-or-dir...> --install-path <game> --output <dir>
 
-# Pack a folder; zstd and lz4 need V8+, zlib and gzip work with V3
-modman pack <dir> -o out.pak --version V11 --compression zstd
+# Pack a folder; zlib and gzip are the only methods Project Wingman loads
+modman pack <dir> -o out.pak --version V11 --compression zlib
 ```
 
 ## Project Structure

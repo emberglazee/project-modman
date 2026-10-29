@@ -43,7 +43,8 @@ install. The page only reads the parts it needs.
 
 Press **Merge mods**. When it finishes you get a download button for
 `SicarioCombine_P.pak`. The **Output** menu chooses uncompressed, Zlib, or Gzip
-for the merged pak; it is V3, so zstd and LZ4 need `modman pack --version V11`.
+for the merged pak; it is V3. Project Wingman has no zstd or LZ4 decompressor,
+so those methods are read-only and not offered.
 
 To install:
 

@@ -161,7 +161,8 @@ enum Commands {
         /// PAK version (V3, V8B or V11, default: V11)
         #[arg(long, default_value = "V11")]
         version: String,
-        /// Compression algorithm (zlib, gzip, zstd, lz4)
+        /// Compression algorithm (zlib or gzip; Project Wingman cannot load
+        /// zstd or lz4)
         #[arg(long)]
         compression: Option<String>,
     },
@@ -350,7 +351,7 @@ fn main() {
                 "Packing {} to {} (v{}, mount: {}) ...",
                 input, output_path, ver, mount_point
             );
-            let comp = parse_compression(compression.as_deref());
+            let comp = parse_pack_compression(compression.as_deref());
             match modman_pak::pack(&input, &output_path, ver, mount_point, comp) {
                 Ok(()) => println!("Done!"),
                 Err(e) => {
@@ -1539,7 +1540,9 @@ fn resolve_paks_dir(path: &str) -> std::path::PathBuf {
     }
 }
 
-/// Parse a compression name for `pack`, where zstd and lz4 are valid with V8+.
+/// Parse a compression name. The callers decide which methods they expose:
+/// `pack` rejects zstd/lz4 for Project Wingman, and `combine` rejects them
+/// because it writes a V3 pak.
 fn parse_compression(value: Option<&str>) -> Option<modman_pak::Compression> {
     value.map(|c| match c.to_lowercase().as_str() {
         "zlib" => modman_pak::Compression::Zlib,
@@ -1547,16 +1550,29 @@ fn parse_compression(value: Option<&str>) -> Option<modman_pak::Compression> {
         "zstd" => modman_pak::Compression::Zstd,
         "lz4" => modman_pak::Compression::LZ4,
         _ => {
-            eprintln!(
-                "Error: unsupported compression '{}'. Use zlib, gzip, zstd, or lz4.",
-                c
-            );
+            eprintln!("Error: unsupported compression '{}'. Use zlib or gzip.", c);
             std::process::exit(1);
         }
     })
 }
 
-/// `combine` writes a V3 pak, where only zlib and gzip are defined.
+/// Parse a compression name for `pack`, where only the methods Project
+/// Wingman can load are valid. Zstd and LZ4 remain readable but are not
+/// write options for this game.
+fn parse_pack_compression(value: Option<&str>) -> Option<modman_pak::Compression> {
+    let compression = parse_compression(value);
+    if matches!(
+        compression,
+        Some(modman_pak::Compression::Zstd) | Some(modman_pak::Compression::LZ4)
+    ) {
+        eprintln!("Error: Project Wingman cannot load zstd or lz4 paks. Use zlib or gzip.");
+        std::process::exit(1);
+    }
+    compression
+}
+
+/// Parse a compression name for `combine`, where zstd and lz4 are rejected
+/// because `combine` writes a V3 pak.
 fn parse_combine_compression(value: Option<&str>) -> Option<modman_pak::Compression> {
     let compression = parse_compression(value);
     if matches!(
