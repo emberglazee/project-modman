@@ -40,11 +40,12 @@ feature to read compressed paks`. This release restores the reader, restores
   byte-identical to the CLI's.
 
 ### What it costs
-- The CLI grows from 2,168,560 to 3,297,832 bytes, the GUI from 11,978,056 to
-  13,024,464, the wasm module from 376,173 to 1,102,662, and the single-file
-  page from 568,250 to 1,538,532. These are local Linux amd64 release builds
-  (wasm and page from a local `wasm-pack` build); the compressed-pak code is
-  the bulk of the difference.
+- The CLI grows from 2,168,560 to 3,306,720 bytes, the GUI from 11,978,056 to
+  12,983,392, the wasm module from 376,173 to 1,106,487, and the single-file
+  page from 568,250 to 1,543,632. These are the Linux amd64 artifacts from CI
+  run `40799869641` (commit `ab9af43`); the wasm and page are from that run's
+  Pages artifact. The release bump adds the 0.6.1 version string, so re-measure
+  the published assets if the exact bytes matter.
 - The uncompressed gates are unchanged: the 29-pak aralanche merge still hashes
   `555dca0d12d2ac24…` at 4,607,949,935 bytes, and the `awfap-preset.dtp` build
   still hashes `676333ac…` at 167,017 bytes.
